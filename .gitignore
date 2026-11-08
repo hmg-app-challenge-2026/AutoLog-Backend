@@ -16,5 +16,3 @@ dist/
 *.keystore
 .DS_Store
 
-# 기획 문서 (공개 저장소에 올리지 않음)
-/docs/
