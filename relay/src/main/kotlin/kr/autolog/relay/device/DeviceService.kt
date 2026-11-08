@@ -7,13 +7,23 @@ import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.time.Clock
+import java.util.UUID
 
 /**
  * 기기 등록과 기기 토큰 인증 (F-40).
  * 연결 코드는 1회·24시간. 토큰 원문은 응답으로 한 번만 주고, DB에는 해시만 남긴다.
  */
+/** 기기가 새로 등록됐을 때 할 일 (예: 기준 정보 배포, F-43). */
+fun interface DeviceRegisteredListener {
+    fun onRegistered(vehicleId: UUID, orgId: UUID)
+}
+
 @Service
-class DeviceService(private val repo: DeviceRepository, private val clock: Clock) {
+class DeviceService(
+    private val repo: DeviceRepository,
+    private val clock: Clock,
+    private val listeners: List<DeviceRegisteredListener> = emptyList(),
+) {
     @Transactional
     fun register(code: String): DeviceRegisterResponse {
         val now = clock.instant()
@@ -26,6 +36,7 @@ class DeviceService(private val repo: DeviceRepository, private val clock: Clock
         }
         val token = Tokens.newToken()
         val vehicle = repo.saveDeviceToken(connect.vehicleId, Tokens.sha256Hex(token), now)
+        listeners.forEach { it.onRegistered(vehicle.vehicleId, vehicle.orgId) }
         return DeviceRegisterResponse(
             deviceToken = token,
             vehicleId = vehicle.vehicleId.toString(),

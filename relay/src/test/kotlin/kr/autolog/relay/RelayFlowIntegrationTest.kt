@@ -5,6 +5,7 @@ import kr.autolog.relay.inbox.InboxService
 import kr.autolog.shared.AutoLogJson
 import kr.autolog.shared.DeviceRegisterResponse
 import kr.autolog.shared.InboxItem
+import kr.autolog.shared.InboxKind
 import kr.autolog.shared.QrTokenResponse
 import kr.autolog.shared.UserDto
 import kr.autolog.shared.UsersPayload
@@ -88,14 +89,18 @@ class RelayFlowIntegrationTest {
         inbox.deliver(UUID.fromString(vehicleId), UsersPayload(listOf(UserDto("u1", "김운전", "영업", null))))
         val list = http.exchange("/v1/inbox", HttpMethod.GET, auth(device.deviceToken), String::class.java)
         val items = AutoLogJson.decodeFromString(ListSerializer(InboxItem.serializer()), list.body!!)
-        assertEquals("김운전", (items.single().payload as UsersPayload).users.single().name)
-        val ack = http.exchange(
-            "/v1/inbox/${items.single().id}/ack",
-            HttpMethod.POST,
-            auth(device.deviceToken),
-            Void::class.java,
-        )
-        assertEquals(HttpStatus.NO_CONTENT, ack.statusCode)
+        // 등록 직후 기준 정보 4종이 오고, USERS는 최신 1통으로 바뀐다(F-43)
+        assertEquals(4, items.size)
+        assertEquals("김운전", (items.single { it.kind == InboxKind.USERS }.payload as UsersPayload).users.single().name)
+        items.forEach { item ->
+            val ack = http.exchange(
+                "/v1/inbox/${item.id}/ack",
+                HttpMethod.POST,
+                auth(device.deviceToken),
+                Void::class.java,
+            )
+            assertEquals(HttpStatus.NO_CONTENT, ack.statusCode)
+        }
         val again = http.exchange("/v1/inbox", HttpMethod.GET, auth(device.deviceToken), String::class.java)
         assertEquals("[]", again.body)
 
