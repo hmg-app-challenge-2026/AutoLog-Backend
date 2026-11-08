@@ -9,4 +9,7 @@
 | `FakeVoiceApi` | VoiceApi | B | `purpose = VoiceResult.NotUnderstood("…")` 인식 실패 |
 | `FakeReceiptApi` | ReceiptApi | B | `SAMPLE_RECEIPT` / `SAMPLE_UNSURE` / `SAMPLE_FAILED` 세 가지 영수증 |
 | `FakeMailApi` | MailApi | B | `configured = false` 설정 전, `nextResult = Failed(…)` 발송 실패 |
+| `FakeSettingsApi` | SettingsApi | B | `nextSync = SyncResult.Failed("…")` 동기화 실패 |
+| `InMemoryDomainStore` | DomainStore | B | B 테스트용. 앱 A가 Room 구현을 만들 때 동작 기준 |
+| `FakeRelayClient` | RelayClient | B | `qr = QrResult.Failed("…")` QR 발급 실패 |
 | `FakeTripSession` 등 | TripSessionApi, LocalStore, ReportApi, DeviceApi | A | (A 작성 예정) |

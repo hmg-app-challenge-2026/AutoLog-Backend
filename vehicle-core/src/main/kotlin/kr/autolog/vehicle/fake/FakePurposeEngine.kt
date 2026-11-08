@@ -7,6 +7,7 @@ import kr.autolog.vehicle.core.DriverSource
 import kr.autolog.vehicle.core.PurposeDetail
 import kr.autolog.vehicle.core.PurposeEngine
 import kr.autolog.vehicle.core.PurposeRuleId
+import kr.autolog.vehicle.core.SettingsResult
 import kr.autolog.vehicle.core.Suggestion
 import kr.autolog.vehicle.core.TripFacts
 import kr.autolog.vehicle.core.UserBadge
@@ -29,6 +30,9 @@ class FakePurposeEngine(
     override fun orderedUsers(vehicleId: String, now: Long): Flow<List<UserCard>> = flowOf(users)
 
     override suspend fun shouldProposePlace(trip: TripFacts, detail: PurposeDetail): Boolean = proposePlace
+
+    override suspend fun registerClientPlace(trip: TripFacts, label: String): SettingsResult =
+        if (label.isBlank()) SettingsResult.Invalid("이름을 입력해 주세요") else SettingsResult.Ok
 
     companion object {
         val CONFIDENT = Suggestion(PurposeDetail.CLIENT_VISIT, 0.97, PurposeRuleId.SCHEDULE, "sch-1")
