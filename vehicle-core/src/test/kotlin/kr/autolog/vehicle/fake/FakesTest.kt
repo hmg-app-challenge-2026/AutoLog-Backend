@@ -60,7 +60,10 @@ class FakesTest {
     fun `가짜 메일은 설정이 없으면 NOT_CONFIGURED`() = runTest {
         val mail = FakeMailApi(configured = false)
 
-        val r = mail.send(ReportFile(YearMonth.of(2026, 11), File("r.xlsx")), listOf("boss@example.com"))
+        val r = mail.send(
+            ReportFile(YearMonth.of(2026, 11), File("r.xlsx"), "12가3456", 42, 1234.5, 3),
+            listOf("boss@example.com"),
+        )
 
         assertEquals(MailError.NOT_CONFIGURED, (r as MailResult.Failed).error)
     }

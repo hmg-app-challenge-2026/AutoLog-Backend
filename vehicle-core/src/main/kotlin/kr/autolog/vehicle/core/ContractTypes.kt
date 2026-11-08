@@ -182,8 +182,20 @@ sealed interface ConfirmResult {
 
 // ===== 앱 B 제공: 메일 (F-22, F-24) =====
 
-/** 앱 A가 만든 운행기록부 파일. */
-data class ReportFile(val month: YearMonth, val file: File)
+/**
+ * 앱 A가 만든 운행기록부 파일과 메일 제목·본문에 넣을 요약 (F-22).
+ * 제목 "[AutoLog] 2026-11 운행기록부 — 12가3456", 본문 "운행 N건 · 총 X km · 검토 필요 N건".
+ */
+data class ReportFile(
+    val month: YearMonth,
+    val file: File,
+    val plateNo: String,
+    val tripCount: Int,
+    /** 거리를 아는 운행만 더한 값. 거리 미확정 운행은 [reviewCount]에 들어간다. */
+    val totalKm: Double,
+    /** 엑셀 "검토" 열에 표시된 건수 (F-23). */
+    val reviewCount: Int,
+)
 
 /** SMTP 설정. [toString]에 비밀번호가 찍히지 않게 가린다(CONVENTIONS 7.6). */
 data class SmtpConfig(
