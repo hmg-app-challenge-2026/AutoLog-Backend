@@ -27,7 +27,11 @@ data class ReceiptRecord(
 interface ReceiptRepository {
     fun exists(vehicleId: UUID, sha256: String): Boolean
 
+    /** (vehicle_id, sha256) 유니크 위반이면 DuplicateKeyException. */
     fun insert(r: ReceiptRecord)
+
+    /** 그 차의 영수증 썸네일 키. 없거나(만료 삭제) 다른 차 것이면 null. */
+    fun thumbKey(receiptId: UUID, vehicleId: UUID): String?
 
     /** 만료된 영수증의 저장소 키 목록을 돌려주고 행을 지운다. */
     fun deleteExpired(now: Instant): List<String>
@@ -66,6 +70,14 @@ class JdbcReceiptRepository(private val jdbc: JdbcClient) : ReceiptRepository {
             .param("exp", Timestamp.from(r.expiresAt))
             .update()
     }
+
+    override fun thumbKey(receiptId: UUID, vehicleId: UUID): String? = jdbc
+        .sql("SELECT thumb_key FROM receipts WHERE receipt_id = :id AND vehicle_id = :v")
+        .param("id", receiptId)
+        .param("v", vehicleId)
+        .query(String::class.java)
+        .optional()
+        .orElse(null)
 
     override fun deleteExpired(now: Instant): List<String> = jdbc
         .sql("DELETE FROM receipts WHERE expires_at <= :now RETURNING storage_key, thumb_key")

@@ -31,6 +31,7 @@ dependencies {
     implementation("org.flywaydb:flyway-core")
     implementation("org.flywaydb:flyway-database-postgresql")
     implementation("io.minio:minio:8.5.14") // 영수증 원본·썸네일 (S3 호환)
+    implementation("com.drewnoakes:metadata-extractor:2.19.0") // 사진 EXIF 회전값
     runtimeOnly("org.postgresql:postgresql")
 
     testImplementation("org.springframework.boot:spring-boot-starter-test")

@@ -972,7 +972,7 @@ POST /r/{code}/receipt
   4. Gemini 호출: 이미지 + 프롬프트 → JSON(fields, confidence)
      프롬프트: "주유 영수증. 상호, 거래일시(ISO 8601 +09:00), 유종, 수량(L), 단가, 할인, 결제금액, 카드 끝 4자리를 JSON으로. 없으면 null. 각 필드 확신도 0~1. 카드번호는 끝 4자리 외 출력 금지"
   5. 검산 |amount − liters×unit + discount| ≤ max(100, amount×0.5%) → arith_ok
-  6. 카드번호 13~19자리 패턴이 남아 있으면 제거(이중 방어). 원본 이미지의 카드번호 영역은 썸네일에서 블러
+  6. 카드번호 13~19자리 패턴이 남아 있으면 제거(이중 방어). 썸네일은 EXIF 회전만 반영하고 가리지 않는다(국내 카드 영수증은 번호 일부가 가려져 인쇄됨)
   7. inbox(vehicle_id, RECEIPT, ReceiptPayload) 적재
   실패: Gemini 3회 재시도 → ocrStatus=FAILED, 썸네일만 inbox → 차에서 수동 입력
 ```
