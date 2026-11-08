@@ -5,6 +5,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Pleos Vehicle SDK 읽기 권한(Odometer 등)은 SDK 문서 확인 후 추가. CONTROL_* 권한은 선언하지 않는다. -->
+    <!-- [앱 B] Fused Location. 상수: ai.pleos.playground.location.fused.constant.PleosPermission.FUSED_LOCATION -->
+    <uses-permission android:name="pleos.car.permission.FUSED_LOCATION" />
 
     <application>
         <!-- F-16 TripRecordingService 는 session/ 구현 시 추가 (foregroundServiceType 확인) -->

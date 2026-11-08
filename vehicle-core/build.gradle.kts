@@ -62,4 +62,5 @@ dependencies {
     // XLSX: POI 대신 assets 템플릿 XML 치환 + ZipOutputStream 으로 시작 (APK 크기)
 
     testImplementation(libs.junit)
+    testImplementation(libs.coroutines.test)
 }
