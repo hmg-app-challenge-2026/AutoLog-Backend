@@ -15,8 +15,27 @@ data class RelayProperties(
     val connectCodeTtlHours: Long = 24,
     val qrTokenTtlMinutes: Long = 10,
     val inboxRetentionDays: Long = 30,
+    val receiptRetentionDays: Long = 30,
+    val gemini: Gemini = Gemini(),
+    val storage: Storage = Storage(),
 ) {
     data class Admin(val token: String = "", val orgName: String = "데모 조직")
+
+    data class Gemini(
+        val apiKey: String = "",
+        val model: String = "gemini-2.5-flash",
+        val baseUrl: String = "https://generativelanguage.googleapis.com",
+        val maxAttempts: Int = 3,
+    )
+
+    data class Storage(
+        val endpoint: String = "http://localhost:9000",
+        val publicEndpoint: String = "http://localhost:9000",
+        val accessKey: String = "minio",
+        val secretKey: String = "minio12345",
+        val bucket: String = "receipts",
+        val signedUrlDays: Int = 7,
+    )
 }
 
 @Configuration

@@ -20,11 +20,15 @@ autolog:
   gemini:
     api-key: ${GEMINI_API_KEY:}        # 서버 환경변수에만. APK·웹에 두지 않는다.
     model: gemini-2.5-flash
+    base-url: https://generativelanguage.googleapis.com
+    max-attempts: 3
   storage:
     endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
     access-key: ${MINIO_ACCESS_KEY:minio}
     secret-key: ${MINIO_SECRET_KEY:minio12345}
+    public-endpoint: ${MINIO_PUBLIC_ENDPOINT:http://localhost:9000}   # 차가 썸네일을 받을 주소(서명 URL 호스트)
     bucket: receipts
+    signed-url-days: 7
   receipt-retention-days: 30
 
 management.endpoints.web.exposure.include: health
