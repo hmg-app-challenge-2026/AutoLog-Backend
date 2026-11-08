@@ -10,6 +10,7 @@ import kr.autolog.vehicle.core.PurposeRuleId
 import kr.autolog.vehicle.core.SettingsResult
 import kr.autolog.vehicle.core.Suggestion
 import kr.autolog.vehicle.core.TripFacts
+import kr.autolog.vehicle.core.UnassignedTrip
 import kr.autolog.vehicle.core.UserBadge
 import kr.autolog.vehicle.core.UserCard
 
@@ -22,6 +23,7 @@ class FakePurposeEngine(
     var driver: DriverCandidate? = SAMPLE_DRIVER,
     var users: List<UserCard> = SAMPLE_USERS,
     var proposePlace: Boolean = true,
+    var unassigned: List<UnassignedTrip> = SAMPLE_UNASSIGNED,
 ) : PurposeEngine {
     override suspend fun suggest(trip: TripFacts): Suggestion = suggestion
 
@@ -34,10 +36,23 @@ class FakePurposeEngine(
     override suspend fun registerClientPlace(trip: TripFacts, label: String): SettingsResult =
         if (label.isBlank()) SettingsResult.Invalid("이름을 입력해 주세요") else SettingsResult.Ok
 
+    override suspend fun unassignedTrips(vehicleId: String, now: Long): List<UnassignedTrip> = unassigned
+
     companion object {
         val CONFIDENT = Suggestion(PurposeDetail.CLIENT_VISIT, 0.97, PurposeRuleId.SCHEDULE, "sch-1")
         val UNSURE = Suggestion(PurposeDetail.NEEDS_CHECK, 0.5, PurposeRuleId.FALLBACK)
         val SAMPLE_DRIVER = DriverCandidate("u-1", "김영업", DriverSource.SCHEDULE, 0.95)
+        val SAMPLE_UNASSIGNED =
+            listOf(
+                UnassignedTrip(
+                    "t-9",
+                    1_762_041_600_000,
+                    1_762_043_000_000,
+                    23.4,
+                    "09:00 본사 → 판교 거래처 · 23.4 km",
+                    SAMPLE_DRIVER,
+                ),
+            )
         val SAMPLE_USERS =
             listOf(
                 UserCard("u-1", "김영업", "영업1팀", UserBadge.SCHEDULED),

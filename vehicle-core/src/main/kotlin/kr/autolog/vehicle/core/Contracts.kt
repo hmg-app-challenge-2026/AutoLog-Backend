@@ -106,10 +106,19 @@ interface PurposeEngine {
 
     /** 프론트: 위 질문에서 [등록]. 도착 좌표를 거래처(origin=LOCAL)로 저장한다 (F-17). */
     suspend fun registerClientPlace(trip: TripFacts, label: String): SettingsResult
+
+    /**
+     * 프론트: 운전자 선택 화면 위 "이전 운행(09:00, 23.4 km) 운전자는?" 카드 (F-20).
+     * 최근 7일 안에 끝난 운전자 미확정 운행, 최신 순. 고르면 TripSessionApi.assignDriver(앱 A)로 저장한다.
+     */
+    suspend fun unassignedTrips(vehicleId: String, now: Long): List<UnassignedTrip>
 }
 
 /** 음성 입력 (F-09, F-18). 정차 중에만 부른다. 구현: speech/ (Gleo STT). */
 interface VoiceApi {
+    /** 프론트: false면 마이크 버튼을 숨긴다 (F-09 "STT 미지원 → 버튼 숨김"). */
+    val available: StateFlow<Boolean>
+
     /** 프론트: 목적 확인 화면의 마이크 버튼. */
     suspend fun listenPurpose(): VoiceResult<VoicePurpose>
 
@@ -127,6 +136,12 @@ interface ReceiptApi {
 
     /** 프론트: [확정]. 고친 값으로 비용을 저장하고 운행에 연결한 뒤 inbox를 ack한다. [tripId]가 null이면 운행 미연결. */
     suspend fun confirm(receipt: ReceiptPayload, tripId: String?, edits: ReceiptFields): ConfirmResult
+
+    /**
+     * 프론트: 주유 기록 저장 (F-18). 음성([VoiceApi.listenFuel]) 또는 숫자 탭으로 받은 값. 영수증 없음.
+     * [tripId]는 지금(또는 방금 끝난) 운행. 금액이 없거나 검산이 틀리면 Rejected.
+     */
+    suspend fun saveFuel(tripId: String?, fuel: VoiceFuel, source: ExpenseSource, at: Long): ConfirmResult
 }
 
 /** 운행기록부 메일 (F-22, F-24). 구현: mail/ (SMTP). */

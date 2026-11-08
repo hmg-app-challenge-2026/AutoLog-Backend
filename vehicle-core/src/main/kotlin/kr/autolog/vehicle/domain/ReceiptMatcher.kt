@@ -56,13 +56,17 @@ object ReceiptMatcher {
         return PlaceMatcher.match(lat, lng, stations) != null
     }
 
-    /** 예: "09:12 본사 → 판교 거래처", 장소를 모르면 "09:12 출발 · 23.4 km". */
-    internal fun label(t: TripSummary): String {
+    /**
+     * 운행 한 줄 표시. 예: "09:12 본사 → 판교 거래처", 장소를 모르면 "09:12 출발 · 23.4 km".
+     * [withDistance]면 장소가 있어도 거리를 붙인다(F-20 "이전 운행(09:00, 23.4 km)").
+     */
+    fun label(t: TripSummary, withDistance: Boolean = false): String {
         val time = HHMM.format(Instant.ofEpochMilli(t.startTime).atZone(KST))
+        val km = t.distanceKm?.let { " · ${String.format(Locale.ROOT, "%.1f", it)} km" } ?: ""
         return if (t.originLabel != null || t.destinationLabel != null) {
-            "$time ${t.originLabel ?: "?"} → ${t.destinationLabel ?: "?"}"
+            "$time ${t.originLabel ?: "?"} → ${t.destinationLabel ?: "?"}" + if (withDistance) km else ""
         } else {
-            "$time 출발" + (t.distanceKm?.let { " · ${String.format(Locale.ROOT, "%.1f", it)} km" } ?: "")
+            "$time 출발$km"
         }
     }
 

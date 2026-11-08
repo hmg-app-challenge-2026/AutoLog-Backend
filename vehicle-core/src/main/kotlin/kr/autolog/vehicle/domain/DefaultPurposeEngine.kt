@@ -15,6 +15,7 @@ import kr.autolog.vehicle.core.PurposeRuleId
 import kr.autolog.vehicle.core.SettingsResult
 import kr.autolog.vehicle.core.Suggestion
 import kr.autolog.vehicle.core.TripFacts
+import kr.autolog.vehicle.core.UnassignedTrip
 import kr.autolog.vehicle.core.UserCard
 import java.util.UUID
 import kotlin.math.abs
@@ -113,6 +114,34 @@ class DefaultPurposeEngine(
         }
     }
 
+    override suspend fun unassignedTrips(vehicleId: String, now: Long): List<UnassignedTrip> = try {
+        val since = now - UNASSIGNED_LOOKBACK_MS
+        // 직전 운행 규칙을 쓰려면 기간 시작보다 하루 더 앞까지 읽는다.
+        val trips = store.trips(since - PREVIOUS_LOOKBACK_MS, now).filter { it.vehicleId == vehicleId }
+        val users = store.users().first()
+        trips
+            .filter { it.userId == null && it.endTime != null && it.startTime >= since }
+            .sortedByDescending { it.startTime }
+            .map { t ->
+                val facts =
+                    TripFacts(t.tripId, t.vehicleId, t.startTime, t.endTime, endLat = t.endLat, endLng = t.endLng)
+                val w = DriverResolver.SCHEDULE_WINDOW_MS
+                val schedules = store.schedules(vehicleId, t.startTime - w, t.startTime + w)
+                val previous = DriverResolver.previousTrip(trips.filter { it.tripId != t.tripId }, t.startTime)
+                UnassignedTrip(
+                    tripId = t.tripId,
+                    startTime = t.startTime,
+                    endTime = t.endTime,
+                    distanceKm = t.distanceKm,
+                    label = ReceiptMatcher.label(t, withDistance = true),
+                    candidate = DriverResolver.resolve(facts, schedules, previous, users),
+                )
+            }
+    } catch (e: Exception) {
+        log("미확정 운행 조회 실패: ${e.message}")
+        emptyList()
+    }
+
     private fun at(lat: Double?, lng: Double?, places: List<Place>): Place? =
         if (lat == null || lng == null) null else PlaceMatcher.match(lat, lng, places)
 
@@ -122,6 +151,9 @@ class DefaultPurposeEngine(
 
         /** 과거 확정 목적을 볼 기간 (규칙 f). */
         const val PAST_LOOKBACK_MS = 90L * 24 * 60 * 60 * 1000
+
+        /** F-20 질문에 올릴 미확정 운행 기간. */
+        const val UNASSIGNED_LOOKBACK_MS = 7L * 24 * 60 * 60 * 1000
 
         /** 직전 운행을 찾을 기간. 2시간 규칙보다 넉넉히 읽고 DriverResolver가 거른다. */
         const val PREVIOUS_LOOKBACK_MS = 24L * 60 * 60 * 1000

@@ -3,9 +3,11 @@ package kr.autolog.vehicle.domain
 import kotlinx.coroutines.test.runTest
 import kr.autolog.shared.PlaceKind
 import kr.autolog.vehicle.core.ConfirmResult
+import kr.autolog.vehicle.core.ExpenseSource
 import kr.autolog.vehicle.core.PlaceInfo
 import kr.autolog.vehicle.core.QrResult
 import kr.autolog.vehicle.core.TripSummary
+import kr.autolog.vehicle.core.VoiceFuel
 import kr.autolog.vehicle.fake.FakeRelayClient
 import kr.autolog.vehicle.fake.InMemoryDomainStore
 import org.junit.Assert.assertEquals
@@ -97,6 +99,26 @@ class ReceiptServiceTest {
         service.confirm(r, null, r.fields)
 
         assertNull(store.expenses.single().tripId)
+    }
+
+    @Test
+    fun `음성으로 받은 주유 금액·리터를 운행에 연결해 저장한다`() = runTest {
+        val r = service.saveFuel("t-1", VoiceFuel(68_000, 40.0), ExpenseSource.VOICE, kst(9, 20))
+
+        assertTrue(r is ConfirmResult.Saved)
+        val e = store.expenses.single()
+        assertEquals(ExpenseSource.VOICE, e.source)
+        assertEquals(40.0, e.liters!!, 0.0)
+        assertNull(e.receiptSha256)
+    }
+
+    @Test
+    fun `주유 금액이 없거나 단가 검산이 틀리면 저장하지 않는다`() = runTest {
+        assertTrue(service.saveFuel(null, VoiceFuel(null, 40.0), ExpenseSource.TAP, 0) is ConfirmResult.Rejected)
+        assertTrue(
+            service.saveFuel(null, VoiceFuel(90_000, 40.0, 1_700), ExpenseSource.TAP, 0) is ConfirmResult.Rejected,
+        )
+        assertTrue(store.expenses.isEmpty())
     }
 
     @Test
