@@ -15,12 +15,14 @@ spring-dependency = "1.1.7"
 pleos-vehicle = "2.3.2"
 pleos-navi = "3.0.5"
 pleos-fused = "1.0.4"
+pleos-stt = "3.3.1"
 
 [libraries]
 # --- Pleos Connect SDK (app 전용) ---
 pleos-vehicle  = { module = "ai.pleos.playground:Vehicle",       version.ref = "pleos-vehicle" }
 pleos-navi     = { module = "ai.pleos.playground:NaviHelper",    version.ref = "pleos-navi" }
 pleos-fused    = { module = "ai.pleos.playground:FusedLocation", version.ref = "pleos-fused" }
+pleos-stt      = { module = "ai.pleos.playground:SpeechToText",  version.ref = "pleos-stt" }   # Gleo AI STT (F-09, F-18)
 # --- Android (app 전용) ---
 compose-bom    = { module = "androidx.compose:compose-bom",      version.ref = "compose-bom" }
 compose-ui     = { module = "androidx.compose.ui:ui" }

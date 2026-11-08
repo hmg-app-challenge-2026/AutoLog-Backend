@@ -41,3 +41,19 @@
 | 콜백 | `registerFusedLocationCallback / unregisterFusedLocationCallback(FusedLocationListener)`, `onChanged(LocationData)` 하나 | — |
 | 값 | `LocationData(latitude, longitude, altitude, heading: Float, confidence: Float, timestampMillis)` | **accuracy(m) 필드 없음, confidence만 있음** → 명세 6장 대체안 "반경 매칭에 고정 여유 50 m" 적용 예정. confidence 범위는 [검증 필요] |
 | 권한 | `PleosPermission.FUSED_LOCATION = "pleos.car.permission.FUSED_LOCATION"` → vehicle-core 매니페스트에 선언 | 런타임 요청 필요 여부 [검증 필요] |
+
+## Gleo AI SpeechToText 3.3.1 — AAR 정적 분석 (앱 B, 2026-11-09)
+
+에뮬레이터 실행 전, Pleos Nexus의 `ai.pleos.playground:SpeechToText:3.3.1` AAR을 javap로 확인한 결과다.
+
+| 항목 | 내용 |
+|---|---|
+| 좌표 | `ai.pleos.playground:SpeechToText:3.3.1` (의존: `ai.pleos.playground.security:universal-access:0.6.0`, gson, core-ktx). TextToSpeech 3.3.1도 같은 저장소에 있음 |
+| 생성 | `SpeechToText(context, Mode)` — Mode: `HYBRID` / `SERVER` / `ON_DEVICE` |
+| 순서 | `initialize(OnInitializeListener{onSuccess, onFailure(ErrorType)})` → `addListener(ResultListener)` → `request()` → (결과) → `stop()` → 앱 종료 때 `release()` |
+| 결과 | `ResultListener.onUpdated(text: String, isFinal: Boolean)`, 그 밖에 `onReady`, `onStartedRecognition`, `onEndedRecognition`, `onUpdatedEpdData`, `onUpdatedRms` |
+| 오류 | `onError(ErrorType)` — AUDIO_ERROR, MIC_ERROR, NETWORK_ERROR, TIMEOUT, UNAUTHENTICATED, PERMISSION_DENIED, UNAVAILABLE_LANGUAGE, NOT_SUPPORTED_API 등 |
+| 서비스 | 매니페스트에 `ai.pleos.playground.caas.intent.action.SPEECH_START` queries, CAAS 최소 버전 4.1.29. 마이크는 CAAS 서비스가 쓰는 구조로 보임 |
+| 기타 | `registerApp(...)`(서버 연결용으로 보임), `setLocale`, `sendAudio` 존재 |
+
+**[검증 필요]** HYBRID가 `registerApp` 없이 동작하는지, `isFinal=true`가 한 번만 오는지, 앱에 RECORD_AUDIO 권한이 필요한지. 확인 전까지 `SpeechGateway.start()`가 실패하면 `available=false`로 두고 마이크 버튼을 숨긴다(F-09 예외).

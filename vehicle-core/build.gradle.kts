@@ -37,7 +37,7 @@ dependencies {
     implementation(libs.pleos.vehicle)
     implementation(libs.pleos.navi)
     implementation(libs.pleos.fused)
-    // implementation("ai.pleos.playground:SpeechToText:<ver>") // Gleo AI SDK 좌표 확인 후 [검증 필요]
+    implementation(libs.pleos.stt) // Gleo AI SpeechToText 3.3.1 (Pleos Nexus에서 확인)
 
     // 상태 노출 (app 이 collect)
     api(libs.coroutines.android)
