@@ -1,0 +1,133 @@
+package kr.autolog.vehicle.domain
+
+import kr.autolog.shared.PlaceKind
+import java.time.DayOfWeek
+import java.time.Instant
+import java.time.ZoneId
+import java.time.ZonedDateTime
+import kotlin.math.abs
+
+/** 배차 한 건. Room ScheduleEntity에서 필요한 값만 옮긴 것. */
+data class ScheduleCandidate(
+    val scheduleId: String,
+    val startsAt: Long,
+    val destPlaceId: String?,
+    val purposeDetail: String?,
+)
+
+/** 목적 추천 입력. 모두 Room에 있는 값이라 차 안에서 계산한다(기술명세 3.3). */
+data class TripContext(
+    /** 운행 시작 시각(epoch millis). */
+    val startTime: Long,
+    /** 출발지가 매칭된 등록 장소. 없으면 null. */
+    val origin: Place?,
+    /** 도착지가 매칭된 등록 장소. 없으면 null(미등록). */
+    val destination: Place?,
+    /** 이 차의 배차. 시각 필터는 규칙이 한다. */
+    val schedules: List<ScheduleCandidate> = emptyList(),
+    /** 같은 목적지에서 과거에 CONFIRMED된 세부 목적들. */
+    val pastConfirmedAtDestination: List<PurposeDetail> = emptyList(),
+)
+
+/** 규칙 하나. 해당하면 추천, 아니면 null. */
+fun interface PurposeRule {
+    fun evaluate(ctx: TripContext): Suggestion?
+}
+
+/**
+ * 규칙 기반 목적 추천 (F-08, 기술명세 3.3). 위에서부터 **첫 번째로 맞는 규칙**을 쓴다.
+ *
+ * 장소 일치만으로 업무를 확정하지 않는다. 결과는 항상 "추천"이고 사용자가 1탭으로 승인한다.
+ */
+class PurposeRules(private val zone: ZoneId = SEOUL) {
+    private val rules: List<PurposeRule> =
+        listOf(
+            // a. 이 차 배차, 시각 ±2h, 목적지 일치 → 배차 목적
+            PurposeRule { ctx ->
+                val dest = ctx.destination ?: return@PurposeRule null
+                ctx.schedules
+                    .filter { it.destPlaceId == dest.placeId && abs(it.startsAt - ctx.startTime) <= SCHEDULE_WINDOW_MS }
+                    .minByOrNull { abs(it.startsAt - ctx.startTime) }
+                    ?.let { s ->
+                        val detail = PurposeDetail.fromName(s.purposeDetail) ?: PurposeDetail.CLIENT_VISIT
+                        Suggestion(detail, 0.97, PurposeRuleId.SCHEDULE, s.scheduleId)
+                    }
+            },
+            // b. 자택 → 회사, 평일 05:00–10:59 → 출근
+            PurposeRule { ctx ->
+                val t = localTime(ctx.startTime)
+                if (ctx.origin?.kind == PlaceKind.HOME &&
+                    ctx.destination?.isWorkplace() == true &&
+                    t.isWeekday() &&
+                    t.hour in 5..10
+                ) {
+                    Suggestion(PurposeDetail.COMMUTE_IN, 0.95, PurposeRuleId.COMMUTE_IN)
+                } else {
+                    null
+                }
+            },
+            // c. 회사 → 자택, 16:00–22:59 → 퇴근
+            PurposeRule { ctx ->
+                val t = localTime(ctx.startTime)
+                if (ctx.origin?.isWorkplace() == true && ctx.destination?.kind == PlaceKind.HOME && t.hour in 16..22) {
+                    Suggestion(PurposeDetail.COMMUTE_OUT, 0.95, PurposeRuleId.COMMUTE_OUT)
+                } else {
+                    null
+                }
+            },
+            // d. 목적지가 거래처 → 거래처 방문
+            PurposeRule { ctx ->
+                if (ctx.destination?.kind ==
+                    PlaceKind.CLIENT
+                ) {
+                    Suggestion(PurposeDetail.CLIENT_VISIT, 0.90, PurposeRuleId.CLIENT)
+                } else {
+                    null
+                }
+            },
+            // e. 목적지가 지점 → 지점 이동
+            PurposeRule { ctx ->
+                if (ctx.destination?.kind ==
+                    PlaceKind.BRANCH
+                ) {
+                    Suggestion(PurposeDetail.BRANCH_MOVE, 0.90, PurposeRuleId.BRANCH)
+                } else {
+                    null
+                }
+            },
+            // f. 같은 목적지에서 과거 CONFIRMED ≥ 3 → 가장 많이 확정한 목적
+            PurposeRule { ctx ->
+                if (ctx.destination == null ||
+                    ctx.pastConfirmedAtDestination.size < PAST_CONFIRMED_MIN
+                ) {
+                    return@PurposeRule null
+                }
+                val top = ctx.pastConfirmedAtDestination.groupingBy { it }.eachCount().maxBy { it.value }.key
+                Suggestion(top, 0.80, PurposeRuleId.PAST_CONFIRMED)
+            },
+            // g. 주말 + 미등록 목적지 → 확인 필요(낮은 확신)
+            PurposeRule { ctx ->
+                if (ctx.destination == null && !localTime(ctx.startTime).isWeekday()) {
+                    Suggestion(PurposeDetail.NEEDS_CHECK, 0.30, PurposeRuleId.WEEKEND_UNKNOWN)
+                } else {
+                    null
+                }
+            },
+            // h. 그 외 → 확인 필요
+            PurposeRule { Suggestion(PurposeDetail.NEEDS_CHECK, 0.50, PurposeRuleId.FALLBACK) },
+        )
+
+    fun suggest(ctx: TripContext): Suggestion = rules.firstNotNullOf { it.evaluate(ctx) }
+
+    private fun localTime(epochMs: Long): ZonedDateTime = Instant.ofEpochMilli(epochMs).atZone(zone)
+
+    private fun ZonedDateTime.isWeekday() = dayOfWeek != DayOfWeek.SATURDAY && dayOfWeek != DayOfWeek.SUNDAY
+
+    private fun Place.isWorkplace() = kind == PlaceKind.OFFICE || kind == PlaceKind.BRANCH
+
+    companion object {
+        val SEOUL: ZoneId = ZoneId.of("Asia/Seoul")
+        const val SCHEDULE_WINDOW_MS = 2 * 60 * 60 * 1000L
+        const val PAST_CONFIRMED_MIN = 3
+    }
+}
