@@ -111,3 +111,9 @@ data class DeviceRegisterResponse(
     @SerialName("vehicle_id") val vehicleId: String,
     @SerialName("org_id") val orgId: String,
 )
+
+// ---- 영수증 QR (F-30) ----
+
+/** POST /v1/qr-tokens 응답. 차는 [url]을 QR로 보여 준다. */
+@Serializable
+data class QrTokenResponse(val url: String, @SerialName("expires_at") val expiresAt: String)

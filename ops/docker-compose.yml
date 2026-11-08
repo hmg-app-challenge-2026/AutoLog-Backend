@@ -12,6 +12,9 @@ services:
       DB_PASSWORD: ${DB_PASSWORD}
       GEMINI_API_KEY: ${GEMINI_API_KEY}
       MINIO_ENDPOINT: http://minio:9000
+      MINIO_PUBLIC_ENDPOINT: ${MINIO_PUBLIC_ENDPOINT}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
+      ADMIN_TOKEN: ${ADMIN_TOKEN}
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
     ports: ["8080:8080"]
@@ -27,7 +30,8 @@ services:
     volumes: [pgdata:/var/lib/postgresql/data]
 
   minio:
-    image: minio/minio:RELEASE.2024-12-18T13-15-44Z
+    # MinIO 공식 이미지(minio/minio)는 더 이상 공개 배포되지 않는다(2026-11 확인). S3 호환 대체: chainguard/minio
+    image: chainguard/minio:latest
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ACCESS_KEY}
