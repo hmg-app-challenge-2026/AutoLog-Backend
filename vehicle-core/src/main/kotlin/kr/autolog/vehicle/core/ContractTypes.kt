@@ -1,6 +1,7 @@
 // Contracts.kt 인터페이스가 주고받는 타입. 프론트도 쓰므로 Android·SDK·Room 타입을 넣지 않는다.
 package kr.autolog.vehicle.core
 
+import kr.autolog.shared.PlaceKind
 import java.io.File
 import java.time.YearMonth
 
@@ -34,6 +35,97 @@ data class TripFacts(
     val destinationLabel: String? = null,
     val driverUserId: String? = null,
 )
+
+/** 기준 정보가 어디서 왔는지. 서버 배포분은 inbox 수신 때 통째로 바뀌고, 차 안 입력분은 남는다. */
+enum class Origin { SERVER, LOCAL }
+
+// ===== DomainStore 경계 타입 (앱 A가 Room에서 옮겨 담는다) =====
+
+data class UserInfo(
+    val userId: String,
+    val name: String,
+    val dept: String? = null,
+    val email: String? = null,
+    val origin: Origin = Origin.SERVER,
+)
+
+/** 운전자 선택 기록(recent_users). */
+data class RecentUse(val userId: String, val lastUsedAt: Long)
+
+data class PlaceInfo(
+    val placeId: String,
+    val label: String,
+    val kind: PlaceKind,
+    val lat: Double,
+    val lng: Double,
+    val radiusM: Int = 150,
+    /** 이 장소의 기본 세부 목적(PurposeDetail.name). */
+    val defaultPurpose: String? = null,
+    val origin: Origin = Origin.SERVER,
+)
+
+data class ScheduleInfo(
+    val scheduleId: String,
+    val userId: String,
+    val startsAt: Long,
+    val endsAt: Long,
+    val destPlaceId: String? = null,
+    /** PurposeDetail.name. */
+    val purposeDetail: String? = null,
+)
+
+/** 운행 요약. 추천·매칭에 필요한 값만. */
+data class TripSummary(
+    val tripId: String,
+    val vehicleId: String,
+    val userId: String?,
+    val startTime: Long,
+    val endTime: Long?,
+    val distanceKm: Double? = null,
+    val originLabel: String? = null,
+    val destinationLabel: String? = null,
+    val endLat: Double? = null,
+    val endLng: Double? = null,
+    /** 확정된 세부 목적. 추천만 됐거나 미확정이면 null. */
+    val confirmedPurpose: PurposeDetail? = null,
+    /** 운행 중 정차 라벨들(StopEntity.label). 주유소 정차 판단에 쓴다. */
+    val stopLabels: List<String> = emptyList(),
+)
+
+data class RecipientInfo(val email: String, val name: String? = null, val origin: Origin = Origin.LOCAL)
+
+/** 영수증 확정으로 저장할 비용 (expenses, kind=FUEL, source=OCR). */
+data class ExpenseDraft(
+    val tripId: String?,
+    val occurredAt: Long,
+    val amountWon: Int,
+    val liters: Double?,
+    val unitPrice: Int?,
+    val discountWon: Int,
+    val fuelType: String?,
+    val merchant: String?,
+    /** 끝 4자리 숫자만. */
+    val cardLast4: String?,
+    val receiptId: String,
+    val receiptSha256: String,
+    val thumbUrl: String,
+    /** OCR 확신도 원본(필드 이름 → 0~1). 사용자가 고친 필드는 1.0이 아니라 원래 값 그대로 둔다. */
+    val ocrConfidence: Map<String, Double>,
+    /** 사용자가 고친 필드 이름. 원본 값은 OCR 결과에 남는다(CONVENTIONS 7.1). */
+    val editedFields: Set<String>,
+)
+
+sealed interface SyncResult {
+    data class Ok(val received: Int) : SyncResult
+
+    data class Failed(val reason: String) : SyncResult
+}
+
+sealed interface SettingsResult {
+    data object Ok : SettingsResult
+
+    data class Invalid(val reason: String) : SettingsResult
+}
 
 // ===== 앱 B 제공: 맥락 (F-06, F-07) =====
 
