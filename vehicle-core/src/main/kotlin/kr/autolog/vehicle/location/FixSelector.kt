@@ -1,18 +1,6 @@
 package kr.autolog.vehicle.location
 
-/**
- * Fused Location 좌표 한 건 (F-07). SDK의 LocationData를 옮긴 것.
- *
- * SDK에는 accuracy(m)가 없고 confidence만 있다(FusedLocation 1.0.4 AAR 확인).
- * confidence의 범위·의미는 에뮬레이터에서 확인한다. [검증 필요]
- */
-data class LocationFix(
-    val lat: Double,
-    val lng: Double,
-    val headingDeg: Float,
-    val confidence: Float,
-    val timestampMs: Long,
-)
+import kr.autolog.vehicle.core.LocationFix
 
 /**
  * 출발·도착 스냅샷에 쓸 좌표를 고른다. 순수 로직이라 JVM 테스트가 된다.

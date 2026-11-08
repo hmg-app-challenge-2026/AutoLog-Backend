@@ -1,5 +1,6 @@
 package kr.autolog.vehicle.location
 
+import kr.autolog.vehicle.core.LocationFix
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test

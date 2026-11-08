@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import kr.autolog.vehicle.core.LocationFix
 import kr.autolog.vehicle.core.sdkListenerFlow
 import java.time.Clock
 
