@@ -6,13 +6,17 @@ spring:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/autolog}
     username: ${DB_USER:autolog}
     password: ${DB_PASSWORD:autolog}
-  jpa:
-    hibernate.ddl-auto: validate
-    open-in-view: false
   flyway.enabled: true
   servlet.multipart.max-file-size: 15MB
 
 autolog:
+  public-base-url: ${PUBLIC_BASE_URL:http://localhost}   # QR에 들어갈 주소 (폰이 접속)
+  admin:
+    token: ${ADMIN_TOKEN:}             # 비어 있으면 /admin API 비활성. JWT 도입 전 임시 인증
+    org-name: ${ADMIN_ORG_NAME:데모 조직}
+  connect-code-ttl-hours: 24
+  qr-token-ttl-minutes: 10
+  inbox-retention-days: 30
   gemini:
     api-key: ${GEMINI_API_KEY:}        # 서버 환경변수에만. APK·웹에 두지 않는다.
     model: gemini-2.5-flash
