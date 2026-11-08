@@ -1,6 +1,9 @@
 package kr.autolog.vehicle.domain
 
 import kr.autolog.shared.PlaceKind
+import kr.autolog.vehicle.core.PurposeDetail
+import kr.autolog.vehicle.core.PurposeRuleId
+import kr.autolog.vehicle.core.Suggestion
 import java.time.DayOfWeek
 import java.time.Instant
 import java.time.ZoneId

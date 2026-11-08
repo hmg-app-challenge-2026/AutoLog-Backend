@@ -1,6 +1,9 @@
 package kr.autolog.vehicle.domain
 
 import kr.autolog.shared.PlaceKind
+import kr.autolog.vehicle.core.PurposeCategory
+import kr.autolog.vehicle.core.PurposeDetail
+import kr.autolog.vehicle.core.PurposeRuleId
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
