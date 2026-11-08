@@ -18,7 +18,11 @@ data class RelayProperties(
     val receiptRetentionDays: Long = 30,
     val gemini: Gemini = Gemini(),
     val storage: Storage = Storage(),
+    val geocoder: GeocoderProps = GeocoderProps(),
 ) {
+    /** 주소 → 좌표 (F-52). 키가 비어 있으면 끈다. */
+    data class GeocoderProps(val kakaoKey: String = "", val baseUrl: String = "https://dapi.kakao.com")
+
     data class Admin(val token: String = "", val orgName: String = "데모 조직")
 
     data class Gemini(

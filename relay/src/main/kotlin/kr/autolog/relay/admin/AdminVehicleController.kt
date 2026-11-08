@@ -13,7 +13,6 @@ import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestHeader
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RestController
-import java.security.MessageDigest
 import java.time.Clock
 import java.time.Duration
 import java.time.Instant
@@ -27,13 +26,13 @@ data class ConnectCodeResponse(val code: String, val expiresAt: Instant)
 
 /**
  * 운영 웹 차량 화면 API (F-50). 운영 웹 화면은 프론트 담당.
- *
- * 인증: 관리자 JWT(명세 4.6) 도입 전까지 `X-Admin-Token` 헤더 = 환경변수 ADMIN_TOKEN. 값이 비어 있으면 전부 403.
+ * 인증은 [AdminAuth].
  */
 @RestController
 @RequestMapping("/admin/vehicles")
 class AdminVehicleController(
     private val repo: AdminVehicleRepository,
+    private val auth: AdminAuth,
     private val props: RelayProperties,
     private val clock: Clock,
 ) {
@@ -75,15 +74,7 @@ class AdminVehicleController(
         return ResponseEntity.noContent().build()
     }
 
-    private fun authorize(token: String?): UUID {
-        val expected = props.admin.token
-        val ok =
-            expected.isNotEmpty() &&
-                token != null &&
-                MessageDigest.isEqual(expected.toByteArray(), token.toByteArray())
-        if (!ok) throw ApiException(HttpStatus.FORBIDDEN, "ADMIN_FORBIDDEN", "관리자 토큰이 없거나 틀렸습니다")
-        return repo.ensureOrg(props.admin.orgName)
-    }
+    private fun authorize(token: String?): UUID = auth.authorize(token)
 
     private fun requireVehicle(org: UUID, vehicleId: UUID) {
         if (!repo.exists(org, vehicleId)) throw ApiException(HttpStatus.NOT_FOUND, "VEHICLE_NOT_FOUND", "차량이 없습니다")

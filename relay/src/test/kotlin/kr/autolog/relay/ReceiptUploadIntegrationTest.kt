@@ -6,6 +6,7 @@ import kr.autolog.relay.receipt.ReceiptOcr
 import kr.autolog.shared.AutoLogJson
 import kr.autolog.shared.DeviceRegisterResponse
 import kr.autolog.shared.InboxItem
+import kr.autolog.shared.InboxKind
 import kr.autolog.shared.QrTokenResponse
 import kr.autolog.shared.ReceiptFields
 import kr.autolog.shared.ReceiptPayload
@@ -173,7 +174,7 @@ class ReceiptUploadIntegrationTest {
             ListSerializer(InboxItem.serializer()),
             http.exchange("/v1/inbox", HttpMethod.GET, bearer(device.deviceToken), String::class.java).body!!,
         )
-        val receipt = items.single().payload as ReceiptPayload
+        val receipt = items.single { it.kind == InboxKind.RECEIPT }.payload as ReceiptPayload
         assertEquals(68_000, receipt.fields.amountWon)
         assertEquals(true, receipt.arithOk)
         val thumb = ImageIO.read(URI(receipt.thumbUrl).toURL())
