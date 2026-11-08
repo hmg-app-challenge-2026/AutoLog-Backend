@@ -5,10 +5,12 @@ import kr.autolog.shared.ReceiptPayload
 import kr.autolog.vehicle.core.ConfirmResult
 import kr.autolog.vehicle.core.DomainStore
 import kr.autolog.vehicle.core.ExpenseDraft
+import kr.autolog.vehicle.core.ExpenseSource
 import kr.autolog.vehicle.core.QrResult
 import kr.autolog.vehicle.core.ReceiptApi
 import kr.autolog.vehicle.core.RelayClient
 import kr.autolog.vehicle.core.TripCandidate
+import kr.autolog.vehicle.core.VoiceFuel
 import java.time.Clock
 
 /**
@@ -73,6 +75,36 @@ class ReceiptService(
             ConfirmResult.Saved(id)
         } catch (e: Exception) {
             log("영수증 저장 실패 receipt=${receipt.receiptId}: ${e.message}")
+            ConfirmResult.Rejected("저장하지 못했습니다")
+        }
+    }
+
+    override suspend fun saveFuel(tripId: String?, fuel: VoiceFuel, source: ExpenseSource, at: Long): ConfirmResult {
+        if (source == ExpenseSource.OCR) return ConfirmResult.Rejected("영수증은 확인 화면에서 저장합니다")
+        val amount = fuel.amountWon ?: return ConfirmResult.Rejected("결제 금액을 입력해 주세요")
+        if (amount <= 0) return ConfirmResult.Rejected("결제 금액이 올바르지 않습니다")
+        if (fuel.liters != null && fuel.liters <= 0) return ConfirmResult.Rejected("주유량이 올바르지 않습니다")
+        val fields = ReceiptFields(null, null, null, fuel.liters, fuel.unitPrice, 0, amount, null)
+        if (ReceiptArithmetic.check(fields) == false) return ConfirmResult.Rejected("금액이 수량 × 단가와 맞지 않습니다")
+        return try {
+            val id =
+                store.saveExpense(
+                    ExpenseDraft(
+                        tripId = tripId,
+                        occurredAt = at,
+                        amountWon = amount,
+                        liters = fuel.liters,
+                        unitPrice = fuel.unitPrice,
+                        discountWon = 0,
+                        fuelType = null,
+                        merchant = null,
+                        cardLast4 = null,
+                        source = source,
+                    ),
+                )
+            ConfirmResult.Saved(id)
+        } catch (e: Exception) {
+            log("주유 기록 저장 실패: ${e.message}")
             ConfirmResult.Rejected("저장하지 못했습니다")
         }
     }

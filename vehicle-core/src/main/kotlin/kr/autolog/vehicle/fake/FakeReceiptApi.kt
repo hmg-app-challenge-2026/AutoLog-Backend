@@ -4,9 +4,11 @@ import kr.autolog.shared.OcrStatus
 import kr.autolog.shared.ReceiptFields
 import kr.autolog.shared.ReceiptPayload
 import kr.autolog.vehicle.core.ConfirmResult
+import kr.autolog.vehicle.core.ExpenseSource
 import kr.autolog.vehicle.core.QrResult
 import kr.autolog.vehicle.core.ReceiptApi
 import kr.autolog.vehicle.core.TripCandidate
+import kr.autolog.vehicle.core.VoiceFuel
 
 /**
  * [ReceiptApi] 가짜. 확정한 내용은 [confirmed]에 쌓인다.
@@ -21,6 +23,14 @@ class FakeReceiptApi(
     override suspend fun issueQr(): QrResult = qr
 
     override suspend fun candidates(receipt: ReceiptPayload): List<TripCandidate> = tripCandidates.take(3)
+
+    val fuelEntries = mutableListOf<Pair<String?, VoiceFuel>>()
+
+    override suspend fun saveFuel(tripId: String?, fuel: VoiceFuel, source: ExpenseSource, at: Long): ConfirmResult {
+        if (fuel.amountWon == null) return ConfirmResult.Rejected("결제 금액이 없습니다")
+        fuelEntries += tripId to fuel
+        return ConfirmResult.Saved("fuel-${fuelEntries.size}")
+    }
 
     override suspend fun confirm(receipt: ReceiptPayload, tripId: String?, edits: ReceiptFields): ConfirmResult {
         if (edits.amountWon == null) return ConfirmResult.Rejected("결제 금액이 없습니다")

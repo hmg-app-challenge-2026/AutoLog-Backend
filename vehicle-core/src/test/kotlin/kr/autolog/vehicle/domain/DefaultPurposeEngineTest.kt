@@ -128,6 +128,33 @@ class DefaultPurposeEngineTest {
     }
 
     @Test
+    fun `운전자 없이 끝난 최근 운행을 후보와 함께 최신 순으로 묻는다`() = runTest {
+        store.tripList +=
+            TripSummary("old", "car-1", null, kst(9, day = 1) - 8 * 24 * HOUR, kst(10, day = 1) - 8 * 24 * HOUR)
+        store.tripList += TripSummary("a", "car-1", "u-kim", kst(7), kst(7, 30))
+        store.tripList +=
+            TripSummary(
+                "b",
+                "car-1",
+                null,
+                kst(8),
+                kst(8, 40),
+                distanceKm = 23.4,
+                originLabel = "본사",
+                destinationLabel = "판교",
+            )
+        store.tripList += TripSummary("c", "car-1", null, kst(13), kst(13, 20))
+        store.tripList += TripSummary("other", "car-2", null, kst(12), kst(12, 10))
+
+        val q = engine.unassignedTrips("car-1", kst(15))
+
+        assertEquals(listOf("c", "b"), q.map { it.tripId })
+        assertEquals("08:00 본사 → 판교 · 23.4 km", q[1].label)
+        assertEquals("u-kim", q[1].candidate?.userId) // 2시간 안 직전 운행(a)의 운전자
+        assertEquals(null, q[0].candidate)
+    }
+
+    @Test
     fun `이미 등록된 곳은 다시 등록하지 않는다`() = runTest {
         val r = engine.registerClientPlace(trip(kst(13), office, client), "판교")
 

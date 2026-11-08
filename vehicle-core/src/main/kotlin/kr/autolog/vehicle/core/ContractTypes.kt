@@ -94,7 +94,10 @@ data class TripSummary(
 
 data class RecipientInfo(val email: String, val name: String? = null, val origin: Origin = Origin.LOCAL)
 
-/** 영수증 확정으로 저장할 비용 (expenses, kind=FUEL, source=OCR). */
+/** 비용을 어떻게 입력했는지 (expenses.source). */
+enum class ExpenseSource { OCR, VOICE, TAP }
+
+/** 저장할 주유 비용 (expenses, kind=FUEL). 영수증 확정(OCR) 또는 음성·탭 입력(F-18). */
 data class ExpenseDraft(
     val tripId: String?,
     val occurredAt: Long,
@@ -106,13 +109,15 @@ data class ExpenseDraft(
     val merchant: String?,
     /** 끝 4자리 숫자만. */
     val cardLast4: String?,
-    val receiptId: String,
-    val receiptSha256: String,
-    val thumbUrl: String,
+    /** 영수증 정보. 음성·탭 입력이면 null. */
+    val receiptId: String? = null,
+    val receiptSha256: String? = null,
+    val thumbUrl: String? = null,
     /** OCR 확신도 원본(필드 이름 → 0~1). 사용자가 고친 필드는 1.0이 아니라 원래 값 그대로 둔다. */
-    val ocrConfidence: Map<String, Double>,
+    val ocrConfidence: Map<String, Double> = emptyMap(),
     /** 사용자가 고친 필드 이름. 원본 값은 OCR 결과에 남는다(CONVENTIONS 7.1). */
-    val editedFields: Set<String>,
+    val editedFields: Set<String> = emptySet(),
+    val source: ExpenseSource = ExpenseSource.OCR,
 )
 
 sealed interface SyncResult {
@@ -214,6 +219,18 @@ data class Suggestion(
 
 /** 운전자 후보. */
 data class DriverCandidate(val userId: String, val name: String, val source: DriverSource, val confidence: Double)
+
+/** 운전자가 정해지지 않은 지난 운행 (F-20). */
+data class UnassignedTrip(
+    val tripId: String,
+    val startTime: Long,
+    val endTime: Long?,
+    val distanceKm: Double?,
+    /** 화면 표시용. 예: "09:00 본사 → 판교 거래처 · 23.4 km". */
+    val label: String,
+    /** 배차·직전 운행으로 찾은 후보. 있으면 화면이 그 사람을 먼저 보여 준다. */
+    val candidate: DriverCandidate?,
+)
 
 /** 운전자 선택 화면의 카드 한 장. */
 data class UserCard(
