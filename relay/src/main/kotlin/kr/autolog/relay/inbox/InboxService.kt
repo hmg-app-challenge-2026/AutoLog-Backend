@@ -23,13 +23,26 @@ import java.time.format.DateTimeFormatter
 import java.util.UUID
 
 /**
+ * 차가 편지를 가져갈 때 내용을 새로 고친다. 예: 영수증 썸네일 서명 URL은 7일짜리라
+ * 편지(30일 보관)를 넣을 때가 아니라 가져갈 때 새로 서명한다.
+ */
+fun interface InboxPayloadRefresher {
+    fun refresh(vehicleId: UUID, payload: InboxPayload): InboxPayload
+}
+
+/**
  * 서버 → 차 우체통 (F-42, F-43). 차 → 서버 방향은 없다.
  *
  * - RECEIPT: 쌓인다(영수증마다 1통).
  * - USERS·PLACES·SCHEDULES·RECIPIENTS: 항상 전체 목록이라, 차가 아직 안 가져간 이전 편지는 지우고 최신 1통만 둔다.
  */
 @Service
-class InboxService(private val repo: InboxRepository, private val props: RelayProperties, private val clock: Clock) {
+class InboxService(
+    private val repo: InboxRepository,
+    private val props: RelayProperties,
+    private val clock: Clock,
+    private val refreshers: List<InboxPayloadRefresher> = emptyList(),
+) {
     private val log = LoggerFactory.getLogger(javaClass)
 
     @Transactional
@@ -49,11 +62,14 @@ class InboxService(private val repo: InboxRepository, private val props: RelayPr
             InboxItem(
                 id = row.id,
                 kind = InboxKind.valueOf(row.kind),
-                payload = AutoLogJson.decodeFromString(InboxPayload.serializer(), row.payloadJson),
+                payload = refresh(vehicleId, AutoLogJson.decodeFromString(InboxPayload.serializer(), row.payloadJson)),
                 createdAt = KST_ISO.format(row.createdAt.atOffset(KST)),
             )
         }
     }
+
+    private fun refresh(vehicleId: UUID, payload: InboxPayload): InboxPayload =
+        refreshers.fold(payload) { p, r -> r.refresh(vehicleId, p) }
 
     fun ack(vehicleId: UUID, id: Long) {
         if (!repo.delete(id, vehicleId)) {

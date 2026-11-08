@@ -10,13 +10,20 @@ import kr.autolog.shared.AutoLogJson
 import kr.autolog.shared.InboxPayload
 import kr.autolog.shared.OcrStatus
 import kr.autolog.shared.ReceiptFields
+import kr.autolog.shared.ReceiptPayload
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
+import org.springframework.dao.DuplicateKeyException
+import org.springframework.transaction.support.TransactionOperations
+import java.awt.Color
+import java.awt.image.BufferedImage
+import java.io.ByteArrayOutputStream
 import java.time.Instant
 import java.util.UUID
+import javax.imageio.ImageIO
 
 class ReceiptServiceTest {
     private val clock = TestClock()
@@ -31,11 +38,29 @@ class ReceiptServiceTest {
             OcrResult(ReceiptFields("SK", null, "휘발유", 40.0, 1700, 0, 68_000, "5678-1234"), mapOf("amountWon" to 0.97))
         }
 
-    private fun service() = ReceiptService(QrTokenService(qrRepo, props, clock), receipts, storage, { i, m ->
-        ocr.extract(i, m)
-    }, InboxService(inboxRepo, props, clock), props, clock)
+    private fun service() = ReceiptService(
+        QrTokenService(qrRepo, props, clock),
+        receipts,
+        storage,
+        { i, m -> ocr.extract(i, m) },
+        InboxService(inboxRepo, props, clock, listOf(ReceiptThumbUrlRefresher(receipts, storage))),
+        props,
+        clock,
+        TransactionOperations.withoutTransaction(),
+    )
 
     private val image = "fake-image-bytes".toByteArray()
+
+    /** 흰 바탕 800x400 JPEG. */
+    private fun realJpeg(): ByteArray = ByteArrayOutputStream().also {
+        val img = BufferedImage(800, 400, BufferedImage.TYPE_INT_RGB)
+        img.createGraphics().apply {
+            color = Color.WHITE
+            fillRect(0, 0, 800, 400)
+            dispose()
+        }
+        ImageIO.write(img, "jpg", it)
+    }.toByteArray()
 
     @Test
     fun `업로드하면 OCR 결과가 마스킹·검산되어 차 inbox에 들어간다`() {
@@ -69,6 +94,38 @@ class ReceiptServiceTest {
         val e = assertThrows<ApiException> { service().handleUpload("car1", "tok", image, "image/jpeg") }
 
         assertEquals("RECEIPT_DUPLICATE", e.code)
+    }
+
+    @Test
+    fun `동시에 같은 사진이 올라와 유니크 인덱스에 걸리면 409이고 파일을 지운다`() {
+        receipts.failInsertWith = DuplicateKeyException("uq receipts(vehicle_id, sha256)")
+
+        val e = assertThrows<ApiException> { service().handleUpload("car1", "tok", realJpeg(), "image/jpeg") }
+
+        assertEquals("RECEIPT_DUPLICATE", e.code)
+        assertTrue(storage.objects.isEmpty(), "남은 파일: ${storage.objects.keys}")
+        assertTrue(inboxRepo.rows.isEmpty())
+    }
+
+    @Test
+    fun `DB 기록이 실패하면 저장한 원본과 썸네일을 지운다`() {
+        receipts.failInsertWith = IllegalStateException("DB 다운")
+
+        assertThrows<IllegalStateException> { service().handleUpload("car1", "tok", realJpeg(), "image/jpeg") }
+
+        assertTrue(storage.objects.isEmpty(), "남은 파일: ${storage.objects.keys}")
+    }
+
+    @Test
+    fun `차가 inbox를 가져갈 때마다 썸네일 URL을 새로 서명한다`() {
+        service().handleUpload("car1", "tok", realJpeg(), "image/jpeg")
+        storage.signVersion = 2
+
+        val item = InboxService(inboxRepo, props, clock, listOf(ReceiptThumbUrlRefresher(receipts, storage)))
+            .pending(vehicleId)
+            .single()
+
+        assertTrue((item.payload as ReceiptPayload).thumbUrl.endsWith("?v=2"))
     }
 
     @Test
@@ -109,24 +166,30 @@ private class OneTokenRepo(private val vehicleId: UUID) : QrTokenRepository {
 
 private class MemReceipts : ReceiptRepository {
     val rows = mutableListOf<ReceiptRecord>()
+    var failInsertWith: Exception? = null
 
     override fun exists(vehicleId: UUID, sha256: String) = rows.any { it.vehicleId == vehicleId && it.sha256 == sha256 }
 
     override fun insert(r: ReceiptRecord) {
+        failInsertWith?.let { throw it }
         rows += r
     }
+
+    override fun thumbKey(receiptId: UUID, vehicleId: UUID) =
+        rows.firstOrNull { it.receiptId == receiptId && it.vehicleId == vehicleId }?.thumbKey
 
     override fun deleteExpired(now: Instant) = emptyList<String>()
 }
 
 private class MemStorage : ReceiptStorage {
     val objects = mutableMapOf<String, ByteArray>()
+    var signVersion = 1
 
     override fun put(key: String, bytes: ByteArray, contentType: String) {
         objects[key] = bytes
     }
 
-    override fun signedUrl(key: String) = "signed://$key"
+    override fun signedUrl(key: String) = "signed://$key?v=$signVersion"
 
     override fun delete(key: String) {
         objects.remove(key)

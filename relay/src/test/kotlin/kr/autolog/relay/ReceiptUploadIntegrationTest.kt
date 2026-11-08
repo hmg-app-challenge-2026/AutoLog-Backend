@@ -179,4 +179,29 @@ class ReceiptUploadIntegrationTest {
         val thumb = ImageIO.read(URI(receipt.thumbUrl).toURL())
         assertEquals(1600, thumb.width)
     }
+
+    @Test
+    fun `15MB보다 큰 사진은 413과 RECEIPT_TOO_LARGE`() {
+        val big = ByteArray(15 * 1024 * 1024 + 512 * 1024)
+        val form = LinkedMultiValueMap<String, Any>().apply {
+            add(
+                "image",
+                HttpEntity(
+                    object : ByteArrayResource(big) {
+                        override fun getFilename() = "big.jpg"
+                    },
+                    HttpHeaders().apply { contentType = MediaType.IMAGE_JPEG },
+                ),
+            )
+        }
+
+        val res = http.postForEntity(
+            "/r/anycar/receipt?t=x",
+            HttpEntity(form, HttpHeaders().apply { contentType = MediaType.MULTIPART_FORM_DATA }),
+            Map::class.java,
+        )
+
+        assertEquals(HttpStatus.PAYLOAD_TOO_LARGE, res.statusCode)
+        assertEquals("RECEIPT_TOO_LARGE", res.body!!["code"])
+    }
 }
