@@ -4,6 +4,15 @@
 
 2026 현대자동차그룹 차량용 앱 개발 공모전 (Pleos App Market). 기획·기능·기술 명세는 팀 내부 문서로 관리한다.
 
+## 같이 개발하기
+
+분업·브랜치·커밋·코드 스타일은 **[CONVENTIONS.md](CONVENTIONS.md)** 를 따른다. PR 전에:
+
+```bash
+./gradlew ktlintFormat
+./gradlew ktlintCheck test
+```
+
 ## 구조
 
 | 경로 | 무엇 | 실행 위치 | 차량 APK에 포함 |

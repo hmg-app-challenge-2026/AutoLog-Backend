@@ -41,7 +41,7 @@ android {
 }
 
 dependencies {
-    implementation(project(":vehicle-core"))   // 차량 로직 (→ :shared 포함). :relay 는 절대 넣지 않는다.
+    implementation(project(":vehicle-core")) // 차량 로직 (→ :shared 포함). :relay 는 절대 넣지 않는다.
 
     // Compose
     implementation(platform(libs.compose.bom))

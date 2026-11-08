@@ -52,16 +52,20 @@ enum class OcrStatus { OK, FAILED }
 
 // ---- 기준 정보 배포 (F-43): 항상 전체 목록 ----
 
-@Serializable @SerialName("USERS")
+@Serializable
+@SerialName("USERS")
 data class UsersPayload(val users: List<UserDto>) : InboxPayload
 
-@Serializable @SerialName("PLACES")
+@Serializable
+@SerialName("PLACES")
 data class PlacesPayload(val places: List<PlaceDto>) : InboxPayload
 
-@Serializable @SerialName("SCHEDULES")
+@Serializable
+@SerialName("SCHEDULES")
 data class SchedulesPayload(val schedules: List<ScheduleDto>) : InboxPayload
 
-@Serializable @SerialName("RECIPIENTS")
+@Serializable
+@SerialName("RECIPIENTS")
 data class RecipientsPayload(val recipients: List<RecipientDto>) : InboxPayload
 
 @Serializable

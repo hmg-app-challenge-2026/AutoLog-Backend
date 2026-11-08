@@ -1,0 +1,30 @@
+# 코드 포맷 기준 (CONVENTIONS.md 6장). Android Studio·VS Code·ktlint가 이 파일을 읽는다.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+indent_style = space
+indent_size = 4
+trim_trailing_whitespace = true
+
+[*.{kt,kts}]
+max_line_length = 120
+ktlint_code_style = intellij_idea
+ij_kotlin_allow_trailing_comma = true
+ij_kotlin_allow_trailing_comma_on_call_site = true
+ij_kotlin_imports_layout = *, java.**, javax.**, kotlin.**, ^
+ij_kotlin_name_count_to_use_star_import = 999
+ij_kotlin_name_count_to_use_star_import_for_members = 999
+# Compose 함수는 PascalCase 허용
+ktlint_function_naming_ignore_when_annotated_with = Composable
+
+[*.{ts,tsx,js,jsx,json,yml,yaml,html,css}]
+indent_size = 2
+
+[*.md]
+trim_trailing_whitespace = false
+
+[{gradlew,*.bat}]
+end_of_line = unset

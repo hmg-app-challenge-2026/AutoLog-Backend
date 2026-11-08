@@ -31,24 +31,24 @@ ksp {
 }
 
 dependencies {
-    api(project(":shared"))                 // inbox DTO. :relay 는 절대 넣지 않는다.
+    api(project(":shared")) // inbox DTO. :relay 는 절대 넣지 않는다.
 
     // Pleos Connect SDK
     implementation(libs.pleos.vehicle)
     implementation(libs.pleos.navi)
     implementation(libs.pleos.fused)
-    // implementation("ai.pleos.playground:SpeechToText:<ver>")   // Gleo AI SDK 좌표 확인 후 [검증 필요]
+    // implementation("ai.pleos.playground:SpeechToText:<ver>") // Gleo AI SDK 좌표 확인 후 [검증 필요]
 
     // 상태 노출 (app 이 collect)
     api(libs.coroutines.android)
-    implementation(libs.lifecycle.service)  // Foreground Service
+    implementation(libs.lifecycle.service) // Foreground Service
 
     // 로컬 원본 저장 · 백그라운드
     implementation(libs.room.runtime)
     implementation(libs.room.ktx)
     ksp(libs.room.compiler)
     implementation(libs.work.ktx)
-    implementation(libs.security.crypto)    // SMTP 앱 비밀번호 암호화 저장
+    implementation(libs.security.crypto) // SMTP 앱 비밀번호 암호화 저장
 
     // 중계 서버 inbox 수신
     implementation(libs.retrofit)

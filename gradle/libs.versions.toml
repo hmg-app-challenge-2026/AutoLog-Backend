@@ -58,3 +58,4 @@ kotlin-jpa          = { id = "org.jetbrains.kotlin.plugin.jpa", version.ref = "k
 ksp                 = { id = "com.google.devtools.ksp", version.ref = "ksp" }
 spring-boot         = { id = "org.springframework.boot", version.ref = "spring-boot" }
 spring-dependency   = { id = "io.spring.dependency-management", version.ref = "spring-dependency" }
+ktlint              = { id = "org.jlleitschuh.gradle.ktlint", version = "12.1.2" }
