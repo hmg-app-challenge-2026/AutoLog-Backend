@@ -25,6 +25,7 @@ class DeviceServiceTest {
         val res = service.register("abc234")
 
         assertEquals(vehicleId.toString(), res.vehicleId)
+        assertEquals("12가3456", res.plateNo)
         assertEquals(Tokens.sha256Hex(res.deviceToken), repo.tokenHash)
         assertNotEquals(res.deviceToken, repo.tokenHash)
     }
@@ -77,7 +78,7 @@ private class FakeDeviceRepository(private val vehicleId: UUID, private val orgI
 
     override fun saveDeviceToken(vehicleId: UUID, tokenHash: String, at: Instant): DeviceVehicle {
         this.tokenHash = tokenHash
-        return DeviceVehicle(vehicleId, orgId, "code1234")
+        return DeviceVehicle(vehicleId, orgId, "code1234", "12가3456", "아이오닉5")
     }
 
     override fun findByTokenHash(tokenHash: String) =

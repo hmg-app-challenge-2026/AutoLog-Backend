@@ -80,6 +80,8 @@ class RelayFlowIntegrationTest {
         assertEquals(HttpStatus.OK, reg.statusCode)
         val device = AutoLogJson.decodeFromString(DeviceRegisterResponse.serializer(), reg.body!!)
         assertEquals(vehicleId, device.vehicleId)
+        assertEquals("12가3456", device.plateNo)
+        assertEquals("아이오닉5", device.model)
         assertEquals(
             HttpStatus.BAD_REQUEST,
             http.postForEntity("/v1/devices", json("""{"code":"$code"}"""), String::class.java).statusCode,
