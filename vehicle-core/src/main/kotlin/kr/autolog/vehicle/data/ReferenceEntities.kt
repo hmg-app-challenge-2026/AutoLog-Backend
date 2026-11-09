@@ -77,9 +77,20 @@ data class ExpenseEntity(
 @Entity(tableName = "trip_expense_links", primaryKeys = ["expenseId", "tripId"], indices = [Index("tripId")])
 data class TripExpenseLinkEntity(val expenseId: String, val tripId: String)
 
-/** inbox로 받았지만 아직 확정·ack하지 않은 영수증(F-19). payload는 shared DTO JSON 그대로. */
+/**
+ * inbox로 받은 영수증(F-19). payload는 shared DTO JSON 그대로.
+ * 확정하면 [confirmedAt]을 찍고 화면에서 사라진다. 서버 ack가 성공하면 행을 지우고, 실패하면 InboxSyncWorker가 다시 ack한다.
+ */
 @Entity(tableName = "receipt_inbox")
-data class ReceiptInboxEntity(@PrimaryKey val receiptId: String, val payloadJson: String, val receivedAt: Long)
+data class ReceiptInboxEntity(
+    @PrimaryKey val receiptId: String,
+    val payloadJson: String,
+    val receivedAt: Long,
+    /** 서버 inbox 편지 id(ack용). v2에서 추가. */
+    val inboxId: Long? = null,
+    /** 사용자가 확정한 시각. null = 아직 확인 전. v2에서 추가. */
+    val confirmedAt: Long? = null,
+)
 
 /** 이미 처리한 inbox 편지. ack가 실패해도 같은 편지를 두 번 반영하지 않는다(F-11). */
 @Entity(tableName = "inbox_seen")
