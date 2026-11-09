@@ -4,7 +4,10 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <!-- Pleos Vehicle SDK 읽기 권한(Odometer 등)은 SDK 문서 확인 후 추가. CONTROL_* 권한은 선언하지 않는다. -->
+    <!-- [앱 A] Pleos Vehicle SDK 읽기 권한(AAR @RequiresPermission 확인, sdk-findings). CONTROL_* 권한은 선언하지 않는다. -->
+    <uses-permission android:name="pleos.car.permission.CAR_DRIVE" />  <!-- Odometer, Gear -->
+    <uses-permission android:name="pleos.car.permission.CAR_INFO" />   <!-- CarInfo(VIN) -->
+    <uses-permission android:name="pleos.car.permission.CAR_ENERGY" /> <!-- Fuel -->
     <!-- [앱 B] Fused Location. 상수: ai.pleos.playground.location.fused.constant.PleosPermission.FUSED_LOCATION -->
     <uses-permission android:name="pleos.car.permission.FUSED_LOCATION" />
 

@@ -4,13 +4,13 @@
 
 | # | 항목 | 결과 | 환경 | 날짜 | 비고 |
 |---|---|---|---|---|---|
-| 1 | Vehicle Service 연결 | | | | |
-| 2 | Odometer 단위·소수점·갱신 주기 | | | | |
+| 1 | Vehicle Service 연결 | `initialize()` 직후 첫 조회가 10–22 ms 안에 성공. capability `READ` | 에뮬레이터 Pleos_Connect_v2.1.0 (API 34, arm64) | 2026-11-09 | 재시도는 실패 대비로 유지(F-01 5초×12). `VehicleProbeTest.connectsAndReadsOdometer` |
+| 2 | Odometer 단위·소수점·갱신 주기 | 콘솔 입력값 그대로(18443.9 → `Float` 18443.9). 리스너 지연 4–5 ms. 23.4 km 차이 정확. **감소 불가**(콘솔이 거부) | 에뮬레이터 Pleos_Connect_v2.1.0 (API 34, arm64) | 2026-11-09 | 에뮬레이터는 값을 바꿀 때만 콜백 → 실차 갱신 주기 [검증 필요]. `odometerListenerReceivesChangeAndDistanceIsExact` |
 | 3 | NaviHelper 목적지 콜백 | | | | |
 | 4 | Fused Location 콜백·accuracy | | | | |
 | 4a | 내비 전환 후 백그라운드 콜백 | | | | |
 | 4b | 절전 후 프로세스 생존 | | | | |
-| 5 | CarInfo·DrivingMode 제공 범위 | | | | |
+| 5 | CarInfo·Gear 제공 범위 | Gear P/D 조회·리스너 동작(지연 13–16 ms). VIN 제공(9자 — 에뮬레이터 더미로 보임). DrivingMode는 기어가 아님(주행 모드) | 에뮬레이터 Pleos_Connect_v2.1.0 (API 34, arm64) | 2026-11-09 | Gear API는 **deprecated**("use the Google GEAR_SELECTION property") → AAOS `GEAR_SELECTION` 폴백 준비. `gearParkAndDriveArriveByReadAndListener`, `recordsVinAvailability` |
 | 7 | XLSX 생성 속도·SMTP 587 | | | | |
 | 8 | STT | | | | |
 
@@ -98,3 +98,20 @@ Gradle 캐시의 `ai.pleos.playground:Vehicle:2.3.2`(+ `vehicle-data:1.1.11`, `v
 - `getCurrentDistanceDriven` 소수 자릿수, VHAL 주입 → 리스너 지연
 - `registerGearSelection`이 VHAL `GEAR_SELECTION`(0x11400400) 주입에 반응하는지
 - `getVINInfo`가 에뮬레이터에서 값을 주는지
+
+### Kotlin에서 쓸 때 (컴파일로 확인)
+
+- 도메인 객체는 프로퍼티가 아니라 **함수**다: `vehicle.getOdometer()`, `getGear()`, `getCarInfo()`, `getFuel()` (같은 이름의 `val`은 private).
+- 콜백 값은 **전부 nullable**이다: `getCurrentDistanceDriven((Float?) -> Unit, …)`, `onDistanceDrivenUpdated(Float?)`, `onSelected(VehicleGear?)`, `getVINInfo((String?) -> Unit, …)`. null은 "못 읽음"으로 다룬다.
+- `Gear.getCurrentGearSelectionState`·`registerGearSelection`은 `@Deprecated("This API is deprecated, use the Google GEAR_SELECTION property.")`. 2.3.2에서는 동작한다.
+
+## 에뮬레이터 탐침 방법 (앱 A, 2026-11-09)
+
+- 이 이미지는 **user 빌드**라 `adb shell cmd car_service inject-vhal-event`·`get-property-value`가 막혀 있다("requires non-user build").
+- 대신 에뮬레이터 안 **Pleos Connect Virtual Console**(포트 8088)로 차량 값을 바꾼다.
+  - 맥에서 보기: `adb forward tcp:8088 tcp:8088` → 브라우저 http://localhost:8088
+  - 콘솔은 브라우저 세션이 살아 있을 때만 값을 받는다: `POST /browser/session?client=<id>`를 1초마다(타임아웃 3초). 없으면 `{"error":"emulator_inactive"}`
+  - 계기판: `PUT /vehicle/odometer?traveled_distance_km=18443.9` (감소하면 `traveled_distance_must_not_decrease`)
+  - 기어: `PUT /vehicle/gear?gear=Park|Reverse|Neutral|Drive`
+  - 상태: `GET /vehicle/state`, 기능 목록·VHAL 매핑: `GET /vehicle/catalog` (계기판 = `PERF_ODOMETER` 0x11600204, 기어 = `VENDOR_GEAR_SELECTION` 0x21400400)
+- 자동 탐침: `./gradlew :vehicle-core:connectedDebugAndroidTest` → `adb logcat -s AutoLog/probe AutoLog/vehicle`. 테스트(`VirtualConsole`)가 에뮬레이터 안 `127.0.0.1:8088`로 직접 하트비트·값 변경을 보낸다.
