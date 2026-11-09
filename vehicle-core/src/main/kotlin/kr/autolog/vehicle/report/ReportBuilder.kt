@@ -144,7 +144,7 @@ class ReportBuilder(
                 )
                 add(listOf(Cell.Text("업무사용비율(%)", bold = true), Cell.Num(s.businessRatio, bold = true)))
             },
-            widths = listOf(11, 5, 10, 8, 30, 12, 12, 10, 10, 10, 12, 26, 20),
+            widths = listOf(16, 6, 11, 10, 30, 19, 19, 13, 14, 16, 12, 36, 26),
             merges = listOf("A1:M1", "A2:M2"),
         )
 
@@ -185,7 +185,7 @@ class ReportBuilder(
                         Cell.Num(expenses.sumOf { it.amountWon }.toDouble(), 0, bold = true),
                 )
             },
-            widths = listOf(11, 6, 16, 8, 9, 9, 9, 11, 14, 32, 10, 14),
+            widths = listOf(12, 6, 18, 8, 10, 10, 10, 12, 14, 34, 11, 16),
         )
     }
 
@@ -204,7 +204,7 @@ class ReportBuilder(
             listOf(Cell.Text("주유량(L)"), Cell.Num(s.liters, 2)),
             listOf(Cell.Text("검토 필요(건)"), Cell.Num(s.reviewCount.toDouble(), 0)),
         ),
-        widths = listOf(20, 14),
+        widths = listOf(22, 14),
     )
 
     private fun reviewSheet(review: ReviewResult) = XlsxWriter.Sheet(
@@ -218,7 +218,7 @@ class ReportBuilder(
                     Cell.Text(i.flag.resolution),
                 )
             },
-        widths = listOf(16, 17, 30, 60),
+        widths = listOf(18, 18, 32, 70),
     )
 
     private fun remark(t: ReportTrip): String = listOfNotNull(
