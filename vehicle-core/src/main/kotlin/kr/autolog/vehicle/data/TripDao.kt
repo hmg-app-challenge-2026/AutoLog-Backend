@@ -41,6 +41,10 @@ interface TripDao {
     @Query("SELECT * FROM trips WHERE status IN ('PENDING_REVIEW', 'NEEDS_RECOVERY') ORDER BY startTime DESC")
     fun observePendingReviews(): Flow<List<TripEntity>>
 
+    /** 검토 표시(F-23)를 남긴다. 엑셀 생성 때마다 다시 계산한다. */
+    @Query("UPDATE trips SET reviewFlags = :flags WHERE tripId = :tripId")
+    suspend fun setReviewFlags(tripId: String, flags: String?)
+
     @Insert
     suspend fun insertStop(stop: StopEntity): Long
 

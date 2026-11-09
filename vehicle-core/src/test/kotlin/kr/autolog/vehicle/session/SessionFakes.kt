@@ -95,6 +95,10 @@ class InMemoryTripDao : TripDao {
             .sortedByDescending { it.startTime }
     }
 
+    override suspend fun setReviewFlags(tripId: String, flags: String?) {
+        trips.value[tripId]?.let { upsert(it.copy(reviewFlags = flags)) }
+    }
+
     override suspend fun insertStop(stop: StopEntity): Long {
         stops += stop.copy(id = stops.size + 1L)
         return stops.size.toLong()
