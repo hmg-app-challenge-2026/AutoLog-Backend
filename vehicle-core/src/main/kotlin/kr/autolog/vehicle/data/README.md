@@ -14,3 +14,7 @@
 | `EncryptedDeviceStore` | 기기 토큰 암호화 저장 |
 | `InboxSync` | 우체통 → Room + `RelayClient`(QR·지금 동기화). 영수증은 확정 때 ack |
 | `InboxSyncWorker` | 15분 주기 + 즉시 1회 |
+
+**실제 서버 확인(수동):** `cd ops && docker compose up -d relay postgres minio` → 운영 API(`X-Admin-Token`)로 차량·직원·연결 코드 생성 →
+`./gradlew :vehicle-core:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=kr.autolog.vehicle.data.RelayLiveTest -Pandroid.testInstrumentationRunnerArguments.relayCode=<코드>`
+(에뮬레이터에서 맥은 `10.0.2.2:8080`). 인자가 없으면 이 테스트는 건너뛴다.
