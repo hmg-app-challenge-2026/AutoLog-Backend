@@ -1,6 +1,7 @@
 package kr.autolog.vehicle.data
 
 import android.content.Context
+import androidx.room.AutoMigration
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
@@ -25,11 +26,16 @@ import androidx.room.RoomDatabase
         InboxSeenEntity::class,
         ReportEntity::class,
     ],
-    version = 1,
+    version = 2,
     exportSchema = true,
+    autoMigrations = [AutoMigration(from = 1, to = 2)], // v2: receipt_inbox.inboxId·confirmedAt
 )
 abstract class AutoLogDb : RoomDatabase() {
     abstract fun tripDao(): TripDao
+
+    abstract fun referenceDao(): ReferenceDao
+
+    abstract fun expenseDao(): ExpenseDao
 
     companion object {
         const val NAME = "autolog.db"
