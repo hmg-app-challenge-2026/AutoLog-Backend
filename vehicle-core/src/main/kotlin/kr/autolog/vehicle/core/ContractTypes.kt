@@ -327,3 +327,144 @@ sealed interface MailResult {
 }
 
 enum class MailError { NOT_CONFIGURED, AUTH, NETWORK, INVALID_RECIPIENT, UNKNOWN }
+
+// ===== 앱 A 제공: 운행 세션 (F-02–05, F-10, F-13, F-16) =====
+
+/** 자동 종료 대기 시간. 이유별로 다르다(프론트 스펙 6.6, 기술명세 2.8). 앱 A 소유 값. */
+object TripTiming {
+    /** 기어 P → 자동 종료까지. P는 "주차했다"는 강한 신호라 짧다. */
+    const val T_GEAR_P_SEC = 5L
+
+    /** 움직임 없음·내비 도착 → 자동 종료까지 (T_stop). */
+    const val T_STOP_SEC = 180L
+}
+
+/** 차의 움직임 판정 결과. 화면 사용 3단계와 입력 차단(F-13)의 기준. 판정 불가는 null로 표현한다. */
+enum class VehicleMotion {
+    /** 기어 P. 전체 앱. */
+    PARKED,
+
+    /** P가 아니고 계기판 거리가 멈춤. 읽기 전용 Peek. */
+    STOPPED,
+
+    /** 계기판 거리가 늘고 있음. 화면 없음(백그라운드). */
+    MOVING,
+}
+
+/** 자동 종료 대기에 들어간 이유. 대기 시간이 다르다([TripTiming]). */
+enum class StopReason { GEAR_P, NO_MOVEMENT, NAVI_ARRIVED, USER_REQUEST }
+
+/** 목적을 어떻게 입력했는지 (TripEntity.purposeInputMode). */
+enum class InputMode { TAP, VOICE }
+
+/** 강제 종료 후 복구 다이얼로그의 선택 (F-10). */
+enum class RecoveryChoice {
+    /** 지금 계기판 값으로 운행을 끝내고 목적 확인으로. */
+    RECORD,
+
+    /** 아직 운행 중 — 이어서 기록. */
+    CONTINUE,
+
+    /** 운행을 지운다. */
+    DELETE,
+}
+
+/** 진행 중(또는 방금 끝난) 운행. 화면 표시에 필요한 값만. */
+data class LiveTrip(
+    val tripId: String,
+    /** 운행 시작(epoch millis, UTC). */
+    val startTime: Long,
+    /** 시작 계기판 값. 못 읽었으면 null(거리 미확정). */
+    val startOdometerKm: Double?,
+    /** 내비 목적지 이름. 없으면 null. */
+    val destinationLabel: String?,
+    val driverUserId: String?,
+    /** 출발지 이름(등록 장소 이름, 없으면 동 단위 주소). 모르면 null (R-9). */
+    val originLabel: String? = null,
+)
+
+sealed interface SessionState {
+    data object Idle : SessionState
+
+    /** [liveKm] null = 계기판을 못 읽음(거리 미확정, 추정 금지). [lastSavedAt] = 마지막 Room 체크포인트 시각. */
+    data class Recording(val trip: LiveTrip, val liveKm: Double?, val lastSavedAt: Long) : SessionState
+
+    /** 자동 종료 대기. [deadlineAt](epoch millis)이 유일한 시계다 — 화면은 남은 시간만 계산한다. */
+    data class StopCandidate(
+        val trip: LiveTrip,
+        val liveKm: Double?,
+        val reason: StopReason,
+        val since: Long,
+        val deadlineAt: Long,
+    ) : SessionState
+
+    /** 운행이 끝났고 목적 확인을 기다린다. [distanceKm] null = 거리 미확정. [suggestion]은 앱 B 추천. */
+    data class PendingReview(val trip: LiveTrip, val distanceKm: Double?, val suggestion: Suggestion?) : SessionState
+
+    /** 앱이 죽었다 살아났는데 그 사이 계기판이 [extraKm]만큼 늘었다 (F-10). 화면은 복구 다이얼로그를 띄운다. */
+    data class NeedsRecovery(val trip: LiveTrip, val extraKm: Double?) : SessionState
+}
+
+/** 앱이 기록하지 않았지만 계기판 차이로 확인된 운행 (F-10). */
+data class MissedTrip(val gapKm: Double, val lastKnownAt: Long)
+
+sealed interface StartResult {
+    data class Started(val tripId: String) : StartResult
+
+    data class Failed(val reason: String) : StartResult
+}
+
+/** 알림 → 화면 딥링크 Intent extra 키 (R-3). 앱 A의 알림과 프론트 Navigator가 같이 쓴다. */
+object DeepLink {
+    const val KEY_ROUTE = "autolog.route"
+    const val KEY_TRIP_ID = "autolog.tripId"
+
+    /** [KEY_ROUTE] 값: 목적 확인 화면. [KEY_TRIP_ID]가 함께 온다. */
+    const val ROUTE_REVIEW = "review"
+}
+
+// ===== 앱 A 제공: 기록 조회·운행기록부·서버 연결 (F-01, F-12, F-21) =====
+
+/** 사내 서버 전송 상태. 업로드(R-4)는 2차 합의 전이라 지금은 항상 null(전송 안 씀). */
+enum class UploadState { PENDING, DONE, FAILED }
+
+/**
+ * 운행 기록 한 줄. 비어 있는 값은 "미확정"이다 — [purpose] null = 목적 확인 필요,
+ * [driverUserId] null = 운전자 미확정, [distanceKm] null = 거리 미확정(추정 금지).
+ */
+data class TripRow(
+    val tripId: String,
+    val startTime: Long,
+    val endTime: Long?,
+    val driverUserId: String?,
+    val originLabel: String?,
+    val destinationLabel: String?,
+    val distanceKm: Double?,
+    val purpose: PurposeDetail?,
+    val note: String? = null,
+    val upload: UploadState? = null,
+)
+
+sealed interface ReportBuildResult {
+    data class Built(val file: ReportFile) : ReportBuildResult
+
+    /** 저장 공간 부족 등. 화면은 [reason]을 보여 준다. */
+    data class Failed(val reason: String) : ReportBuildResult
+}
+
+sealed interface ConnectionState {
+    data object NotRegistered : ConnectionState
+
+    /** [vehicleLabel] 예: "12가3456 · 아이오닉 6". [lastSyncAt] = 마지막 inbox 수신 성공. */
+    data class Registered(val vehicleLabel: String, val serverUrl: String, val lastSyncAt: Long?) : ConnectionState
+
+    /** 등록은 됐지만 최근 inbox 수신이 실패했다. 로컬 기능은 그대로 동작한다. */
+    data class Unreachable(val vehicleLabel: String, val serverUrl: String) : ConnectionState
+}
+
+sealed interface RegisterResult {
+    data object Ok : RegisterResult
+
+    /** 주소 형식 오류, 코드 무효·만료, 서버 연결 실패. 화면은 [reason]을 보여 준다. */
+    data class Invalid(val reason: String) : RegisterResult
+}
