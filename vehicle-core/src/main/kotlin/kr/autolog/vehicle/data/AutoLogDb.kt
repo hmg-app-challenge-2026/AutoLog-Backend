@@ -37,6 +37,8 @@ abstract class AutoLogDb : RoomDatabase() {
 
     abstract fun expenseDao(): ExpenseDao
 
+    abstract fun inboxDao(): InboxDao
+
     companion object {
         const val NAME = "autolog.db"
 
