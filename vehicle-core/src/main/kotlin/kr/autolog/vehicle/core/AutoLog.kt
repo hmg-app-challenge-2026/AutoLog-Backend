@@ -30,6 +30,9 @@ import kr.autolog.vehicle.mail.EncryptedSmtpCredentialStore
 import kr.autolog.vehicle.mail.MailService
 import kr.autolog.vehicle.mail.PrefsAutoSendPreference
 import kr.autolog.vehicle.navi.NaviGateway
+import kr.autolog.vehicle.report.MonthlyReportWorker
+import kr.autolog.vehicle.report.MonthlySender
+import kr.autolog.vehicle.report.PrefsMonthlySentStore
 import kr.autolog.vehicle.report.ReportBuilder
 import kr.autolog.vehicle.session.TripRecordingService
 import kr.autolog.vehicle.session.TripSessionManager
@@ -125,6 +128,8 @@ object AutoLog {
             log = log,
         )
 
+        val settings = SettingsService(store, inbox, PrefsAutoSendPreference(app), log = log)
+        val mail = MailService(EncryptedSmtpCredentialStore(app))
         val components = AutoLogComponents(
             session = session,
             local = RoomLocalStore(db.tripDao(), db.expenseDao()),
@@ -134,12 +139,14 @@ object AutoLog {
             purpose = purpose,
             voice = VoiceService(speech, store, log = log),
             receipts = ReceiptService(store, inbox, log = log),
-            mail = MailService(EncryptedSmtpCredentialStore(app)),
-            settings = SettingsService(store, inbox, PrefsAutoSendPreference(app), log = log),
+            mail = mail,
+            settings = settings,
         )
 
         session.start()
         runCatching { TripRecordingService.start(app, session) }.onFailure { log("service start: ${it.message}") }
+        MonthlyReportWorker.host = MonthlySender(settings, report, mail, PrefsMonthlySentStore(app), log = log)
+        MonthlyReportWorker.schedule(app)
         InboxSyncWorker.host = inbox
         InboxSyncWorker.schedule(app)
         InboxSyncWorker.runNow(app)

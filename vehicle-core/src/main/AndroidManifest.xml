@@ -6,6 +6,8 @@
     <!-- [앱 A] F-16 기록 서비스. 위치 권한이 필요한 location 타입 대신 specialUse (Android 14+) -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- [앱 A] F-14 부팅 뒤 자동 준비 -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <!-- [앱 A] Pleos Vehicle SDK 읽기 권한(AAR @RequiresPermission 확인, sdk-findings). CONTROL_* 권한은 선언하지 않는다. -->
     <uses-permission android:name="pleos.car.permission.CAR_DRIVE" />  <!-- Odometer, Gear -->
     <uses-permission android:name="pleos.car.permission.CAR_INFO" />   <!-- CarInfo(VIN) -->
@@ -27,5 +29,14 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Vehicle trip logging: keeps odometer and gear listeners alive while the driver uses navigation" />
         </service>
+        <!-- [앱 A] F-14 부팅·업데이트 뒤 AutoLog 조립(세션 복구·자동 시작) -->
+        <receiver
+            android:name="kr.autolog.vehicle.session.BootReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>
