@@ -43,6 +43,13 @@ class FakeVehicle(private val clock: Clock, var km: Double = 18_420.5, var curre
 
     override val gear: Flow<Gear> = gears
 
+    private val ignition = MutableSharedFlow<Unit>(extraBufferCapacity = 8)
+    override val ignitionOff: Flow<Unit> = ignition
+
+    fun turnOff() {
+        ignition.tryEmit(Unit)
+    }
+
     fun drive(km: Double) {
         this.km = kr.autolog.vehicle.session.DistancePolicy.difference(-km, this.km) // this.km + km, 10진수
         odo.tryEmit(OdometerReading(this.km, clock.millis()))

@@ -38,6 +38,8 @@ class VirtualConsole(private val baseUrl: String = "http://127.0.0.1:8088") {
     /** [gear]: Park / Reverse / Neutral / Drive. */
     fun setGear(gear: String) = request("PUT", "/vehicle/gear?gear=$gear")
 
+    fun put(path: String) = request("PUT", path)
+
     private fun request(method: String, path: String): String {
         val conn = URL(baseUrl + path).openConnection() as HttpURLConnection
         return try {
@@ -57,3 +59,6 @@ class VirtualConsole(private val baseUrl: String = "http://127.0.0.1:8088") {
         const val TAG = "AutoLog/probe"
     }
 }
+
+/** 전원 상태 시뮬레이터: Off / Ready / On / Driving 등. */
+fun VirtualConsole.setPower(state: String) = put("/vehicle/power-system/simulator?state=$state")

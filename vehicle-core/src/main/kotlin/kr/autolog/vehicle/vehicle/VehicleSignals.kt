@@ -2,6 +2,7 @@ package kr.autolog.vehicle.vehicle
 
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
 import java.math.BigDecimal
 
 /**
@@ -20,6 +21,9 @@ interface VehicleSignals {
 
     /** 기어 변화. [Gear.UNKNOWN]은 흘려보내지 않는다. */
     val gear: Flow<Gear>
+
+    /** 시동이 꺼지는 순간(OFF·ACC·LOCK). 신호가 없는 차면 아무것도 오지 않는다. */
+    val ignitionOff: Flow<Unit> get() = emptyFlow()
 }
 
 /** 계기판 누적거리 한 건. [km]는 SDK 원본 값을 10진수 표기 그대로 옮긴 것이다. */
