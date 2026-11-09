@@ -11,6 +11,7 @@ import android.os.Build
 import android.util.Log
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kr.autolog.vehicle.core.DeepLink
 import kr.autolog.vehicle.core.TripSessionApi
@@ -34,7 +35,18 @@ class TripRecordingService : LifecycleService() {
         createChannels()
         startInForeground(build(TripNotificationSpec.from(session.state.value)))
         Log.i(TAG, "foreground started")
-        lifecycleScope.launch {
+        follow(session)
+    }
+
+    private var followed: TripSessionApi? = null
+    private var followJob: Job? = null
+
+    /** [session]의 상태를 알림으로 따라간다. 세션이 바뀌면(다시 조립) 새 세션을 따른다. */
+    private fun follow(session: TripSessionApi) {
+        if (followed === session) return
+        followJob?.cancel()
+        followed = session
+        followJob = lifecycleScope.launch {
             session.state.collect { notify(build(TripNotificationSpec.from(it))) }
         }
     }
@@ -42,6 +54,7 @@ class TripRecordingService : LifecycleService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
         val session = host
+        session?.let { follow(it) }
         when (intent?.action) {
             ACTION_RESUME -> lifecycleScope.launch { session?.resume() }
             ACTION_FINALIZE -> lifecycleScope.launch { session?.finalize() }
