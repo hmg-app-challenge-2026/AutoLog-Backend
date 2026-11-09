@@ -92,10 +92,54 @@ class ReviewAndXlsxTest {
 
     @Test
     fun `이달 주유량이 평균 연비 역수의 2배를 넘으면 연료 이상치다`() {
-        // 23.4 km에 10 L = 0.43 L/km > 2 / 10 km/L = 0.2 L/km
-        val r = calc(listOf(trip("t", day)), listOf(fuel("e-1", 10.0)))
+        // 마지막 주유(e-2)는 다음 달 몫이라 빼고, 23.4 km에 10 L = 0.43 L/km > 2 / 10 km/L = 0.2 L/km
+        val r = calc(listOf(trip("t", day)), listOf(fuel("e-1", 10.0), fuel("e-2", 40.0).copy(occurredAt = 20 * day)))
 
         assertTrue(ReviewFlag.FUEL_OUTLIER in r.expenseFlags["e-1"]!!)
+    }
+
+    @Test
+    fun `월말에 한 번 가득 주유한 것은 연료 이상치가 아니다`() {
+        val r = calc(listOf(trip("t", day)), listOf(fuel("e-1", 50.0).copy(occurredAt = 29 * day)))
+
+        assertTrue(r.expenseFlags["e-1"].orEmpty().isEmpty())
+    }
+
+    @Test
+    fun `거리 미확정 운행이 있으면 연비를 판단하지 않는다`() {
+        val trips = listOf(trip("t", day), trip("u", 3 * day).copy(distanceKm = null))
+        val r = calc(trips, listOf(fuel("e-1", 10.0), fuel("e-2", 10.0).copy(occurredAt = 20 * day)))
+
+        assertFalse(r.issues.any { it.flag == ReviewFlag.FUEL_OUTLIER })
+    }
+
+    @Test
+    fun `종일 배차 중간에 운행이 있으면 불일치가 아니다`() {
+        // 09:00–18:00 배차, 13:00 출발 운행 (시작 ±3h 밖이지만 배차 시간 안)
+        val start = 5 * day + 9 * 3_600_000
+        val r = calc(
+            listOf(trip("t", start + 4 * 3_600_000)),
+            schedules = listOf(ReportSchedule("s", "김영업", start, start + 9 * 3_600_000)),
+        )
+
+        assertFalse(r.issues.any { it.flag == ReviewFlag.SCHEDULE_MISMATCH })
+    }
+
+    @Test
+    fun `월말 배차를 다음 달 첫 운행이 채우면 불일치가 아니다`() {
+        // 이 달 운행은 없고, 경계 다음(scheduleTrips)에 30분 뒤 출발한 운행만 있다
+        val s = ReportSchedule("s", "김영업", 28 * day + 23 * 3_600_000, 28 * day + 24 * 3_600_000)
+        val next = trip("next", 29 * day + 30 * 60_000)
+        val r = ReviewCalculator.calculate(
+            emptyList(),
+            emptyList(),
+            listOf(s),
+            emptySet(),
+            now,
+            scheduleTrips = listOf(next),
+        )
+
+        assertTrue(r.issues.isEmpty())
     }
 
     @Test

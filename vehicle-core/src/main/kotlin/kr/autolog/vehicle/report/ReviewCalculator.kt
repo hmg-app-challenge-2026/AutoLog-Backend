@@ -83,6 +83,8 @@ object ReviewCalculator {
         gasStations: Set<String>,
         now: Long,
         kmPerLiter: Double = DEFAULT_KM_PER_LITER,
+        /** 배차와 맞춰 볼 운행. 월 경계 앞뒤 운행까지 넣어야 경계 배차가 오탐되지 않는다. 기본은 [trips]. */
+        scheduleTrips: List<ReportTrip> = trips,
     ): ReviewResult {
         val tripFlags = mutableMapOf<String, MutableSet<ReviewFlag>>()
         val expenseFlags = mutableMapOf<String, MutableSet<ReviewFlag>>()
@@ -108,7 +110,11 @@ object ReviewCalculator {
         }
 
         for (s in schedules.filter { it.endsAt <= now }) {
-            val matched = trips.any { kotlin.math.abs(it.startTime - s.startsAt) <= SCHEDULE_WINDOW_MS }
+            // 배차 시간 [시작−3h, 종료+3h]와 겹치는 운행이 하나라도 있으면 일치(종일 배차 중간 운행 포함)
+            val matched = scheduleTrips.any { t ->
+                val tEnd = t.endTime ?: t.startTime
+                t.startTime <= s.endsAt + SCHEDULE_WINDOW_MS && tEnd >= s.startsAt - SCHEDULE_WINDOW_MS
+            }
             if (!matched) {
                 issues +=
                     ReviewIssue(ReviewFlag.SCHEDULE_MISMATCH, s.startsAt, "배차 ${s.userName ?: ""}".trim())
@@ -124,9 +130,13 @@ object ReviewCalculator {
             }
         }
 
-        val liters = expenses.sumOf { it.liters ?: 0.0 }
+        // 연비는 "주유 사이"로 본다: 달의 마지막 주유는 다음 달 주행분이라 뺀다(월말 가득 주유 오탐 방지).
+        // 거리 미확정 운행이 있으면 km가 적게 잡혀 오탐이 나므로 판단하지 않는다.
+        val fills = expenses.filter { (it.liters ?: 0.0) > 0 }.sortedBy { it.occurredAt }
+        val liters = fills.dropLast(1).sumOf { it.liters ?: 0.0 }
         val km = trips.sumOf { it.distanceKm ?: 0.0 }
-        if (liters > 0 && km > 0 && liters / km > 2.0 / kmPerLiter) {
+        val distanceKnown = trips.none { it.distanceKm == null }
+        if (distanceKnown && fills.size >= 2 && liters > 0 && km > 0 && liters / km > 2.0 / kmPerLiter) {
             expenses.filter { (it.liters ?: 0.0) > 0 }.forEach {
                 expenseFlags.getOrPut(it.expenseId) { mutableSetOf() } +=
                     ReviewFlag.FUEL_OUTLIER

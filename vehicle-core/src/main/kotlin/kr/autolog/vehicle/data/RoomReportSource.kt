@@ -73,6 +73,9 @@ class RoomReportSource(
     }.map { it.label }.toSet()
 
     override suspend fun saveReviewFlags(flags: Map<String, Set<ReviewFlag>>) {
-        flags.forEach { (id, f) -> trips.setReviewFlags(id, f.joinToString(",") { it.name }) }
+        // 빈 집합 = 해소됨 → null로 지운다
+        flags.forEach { (id, f) ->
+            trips.setReviewFlags(id, f.takeIf { it.isNotEmpty() }?.joinToString(",") { it.name })
+        }
     }
 }

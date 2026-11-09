@@ -79,6 +79,17 @@ class TripSessionManager(
     @Volatile private var lastKm: Double? = null
 
     @Volatile private var lastMovedAt: Long? = null
+
+    /** 지금 기록(또는 재개)을 시작한 시각. '움직임 없음' 판단은 이보다 앞선 시각을 기준으로 삼지 않는다. */
+    @Volatile private var watchFrom: Long = 0
+
+    /** 시작 복구 중(계기판 재조회 최대 60초)에는 새 운행을 만들지 않는다. 끝나지 않은 운행이 고아로 남기 때문이다. */
+    @Volatile private var recovering = false
+
+    /** 놓친 운행을 찾은 순간의 계기판 구간. 그 뒤 체크포인트가 lastKnown을 덮어써도 이 값으로 기록한다. */
+    private data class MissedSpan(val startKm: Double, val endKm: Double, val endAt: Long)
+
+    @Volatile private var missedSpan: MissedSpan? = null
     private var observing: Job? = null
 
     fun start() {
@@ -154,15 +165,16 @@ class TripSessionManager(
 
     override suspend fun acceptMissedTrip() = mutex.withLock {
         val missed = _missedTrip.value ?: return@withLock
-        val end = lastKm ?: return@withLock
-        val start = vehicleState().lastKnownOdometerKm ?: return@withLock
+        val span = missedSpan ?: return@withLock
+        val start = span.startKm
+        val end = span.endKm
         val now = clock.millis()
         val trip = TripEntity(
             tripId = newId(),
             vehicleId = vehicleId(),
             userId = null,
             startTime = missed.lastKnownAt,
-            endTime = now,
+            endTime = span.endAt,
             timeEstimated = true,
             startOdometerKm = start,
             endOdometerKm = end,
@@ -172,18 +184,30 @@ class TripSessionManager(
             status = TripStatus.PENDING_REVIEW,
         )
         dao.upsert(trip)
-        saveLastKnown(end, now)
-        _missedTrip.value = null
+        // 그 사이 새 운행이 기록되고 있으면 lastKnown은 이미 더 최신이다. 되돌리지 않는다.
+        if (_state.value is SessionState.Idle) saveLastKnown(maxOf(end, lastKm ?: end), now)
+        clearMissed()
         if (_state.value is SessionState.Idle) {
             _state.value = SessionState.PendingReview(trip.toLive(), trip.distanceKm, suggestion = null)
         }
     }
 
     override suspend fun ignoreMissedTrip() = mutex.withLock {
-        val now = lastKm ?: return@withLock
+        val span = missedSpan ?: return@withLock
+        val idle = _state.value is SessionState.Idle
+        val st = vehicleState()
         dao.saveVehicleState(
-            vehicleState().copy(lastKnownOdometerKm = now, lastKnownAt = clock.millis(), ignoredOdometerKm = now),
+            st.copy(
+                lastKnownOdometerKm = if (idle) maxOf(span.endKm, lastKm ?: span.endKm) else st.lastKnownOdometerKm,
+                lastKnownAt = if (idle) clock.millis() else st.lastKnownAt,
+                ignoredOdometerKm = span.endKm,
+            ),
         )
+        clearMissed()
+    }
+
+    private fun clearMissed() {
+        missedSpan = null
         _missedTrip.value = null
     }
 
@@ -192,8 +216,10 @@ class TripSessionManager(
         val trip = dao.trip(s.trip.tripId) ?: return@withLock
         when (choice) {
             RecoveryChoice.RECORD -> finishLocked(trip, vehicle.readOdometer()?.km ?: lastKm, clock.millis())
-            RecoveryChoice.CONTINUE ->
+            RecoveryChoice.CONTINUE -> {
+                watchFrom = clock.millis()
                 _state.value = SessionState.Recording(s.trip, liveKm(trip, lastKm), clock.millis())
+            }
             RecoveryChoice.DELETE -> {
                 save(trip.copy(status = TripStatus.DISCARDED))
                 lastKm?.let { saveLastKnown(it, clock.millis()) }
@@ -205,6 +231,16 @@ class TripSessionManager(
     // ===== 차량 신호 =====
 
     private suspend fun recoverOnStart() {
+        recovering = true
+        try {
+            recoverLocked()
+        } finally {
+            recovering = false
+        }
+        updateMotion()
+    }
+
+    private suspend fun recoverLocked() {
         val st = vehicleState()
         _currentDriver.value = st.currentDriverUserId
         gear = vehicle.readGear()
@@ -230,11 +266,15 @@ class TripSessionManager(
                         finishLocked(rec!!, decision.endKm, rec.lastSeenAt ?: clock.millis())
                     }
                 is Decision.AskRecovery -> _state.value = SessionState.NeedsRecovery(rec!!.toLive(), decision.extraKm)
-                is Decision.MissedTrip ->
-                    _missedTrip.value = MissedTrip(decision.gapKm, st.lastKnownAt ?: clock.millis())
+                is Decision.MissedTrip -> {
+                    val startKm = st.lastKnownOdometerKm
+                    if (startKm != null && now != null) {
+                        missedSpan = MissedSpan(startKm, now.km, now.at)
+                        _missedTrip.value = MissedTrip(decision.gapKm, st.lastKnownAt ?: clock.millis())
+                    }
+                }
             }
         }
-        updateMotion()
     }
 
     private suspend fun onOdometer(r: OdometerReading) {
@@ -315,7 +355,7 @@ class TripSessionManager(
             when (val s = _state.value) {
                 is SessionState.StopCandidate -> if (now >= s.deadlineAt) finalizeLocked()
                 is SessionState.Recording -> {
-                    val stillSince = lastMovedAt ?: s.trip.startTime
+                    val stillSince = maxOf(lastMovedAt ?: watchFrom, watchFrom)
                     if (lastKm != null && gear != Gear.PARK && now - stillSince >= DrivingJudge.MOVING_WINDOW_MS) {
                         enterStopLocked(s.trip, s.liveKm, StopReason.NO_MOVEMENT, stillSince)
                     }
@@ -337,6 +377,7 @@ class TripSessionManager(
     // ===== 전이 (mutex 안에서만) =====
 
     private suspend fun startLocked(): StartResult {
+        if (recovering) return StartResult.Failed("이전 운행을 확인하는 중입니다. 잠시 후 다시 시작해 주세요")
         val s = _state.value
         if (s is SessionState.Recording || s is SessionState.StopCandidate || s is SessionState.NeedsRecovery) {
             return StartResult.Failed("이미 기록 중입니다")
@@ -362,6 +403,7 @@ class TripSessionManager(
             rawSnapshotJson = "{\"start\":{\"km\":${odo?.km},\"at\":${odo?.at}}}",
         ).let { t -> context.destination.value?.let { t.withDestination(it) } ?: t }
         dao.upsert(trip)
+        watchFrom = now
         _state.value = SessionState.Recording(trip.toLive(), liveKm = odo?.let { 0.0 }, lastSavedAt = now)
         log("start ${trip.tripId} odo=${odo?.km}")
         return StartResult.Started(trip.tripId)
@@ -442,6 +484,7 @@ class TripSessionManager(
             )
         }
         val trip = dao.trip(s.trip.tripId)
+        watchFrom = now
         _state.value = SessionState.Recording(
             s.trip,
             trip?.let { liveKm(it, lastKm) } ?: s.liveKm,
@@ -450,6 +493,7 @@ class TripSessionManager(
     }
 
     private fun continueRecording(trip: TripEntity) {
+        watchFrom = clock.millis()
         _state.value = SessionState.Recording(trip.toLive(), liveKm(trip, lastKm), clock.millis())
     }
 
