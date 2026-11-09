@@ -229,7 +229,7 @@ Pleos Connect SDK는 Kotlin으로 작성된 Android 라이브러리로 Java·Kot
 | Gleo AI — TextToSpeech | "운행 종료. 23.4 km, 거래처 방문으로 기록할까요?" 음성 안내 | 2차 통합(선택) |
 | Vehicle SDK — Fuel | 연료량 급증 → 주유 이벤트 보조 감지 | 보조 |
 | Vehicle SDK — CarInfo | 차량 모델·식별 정보 → 차량 자동 등록 | 보조(제공 범위 확인) |
-| Vehicle SDK — DrivingMode | P/D 전환 → 정차·주행 판정 보조 | 보조(제공 범위 확인) |
+| Vehicle SDK — Gear | 기어 P 순간 계기판 즉시 저장 + 자동 종료, P/D로 주차·주행 판정 | **1차 핵심** |
 | Pleos Fleet API | 다수 차량 원격 데이터 | 계약 이후 확장 |
 | Vehicle Data API | 클라우드 차량 데이터 | 국내 MVP 제외(유럽 한정) |
 
@@ -516,7 +516,7 @@ trips 레코드 예시(내부 포맷, Pleos API 응답 아님):
 | | **앱 A — 차량 데이터·기록·출력 코어** | **앱 B — 맥락·판단·중계** |
 |---|---|---|
 | 한 줄 | 계기판을 읽어 운행을 만들고, 절대 잃지 않고, 엑셀로 내보낸다 | 운행에 "어디로·왜·누가"를 붙이고, 폰·관리자 입력을 차로 잇고, 메일로 보낸다 |
-| 담당 SDK | **Vehicle SDK** — Odometer, DrivingMode, CarInfo, Fuel | **NaviHelper, Fused Location, Gleo AI(STT·TTS)** |
+| 담당 SDK | **Vehicle SDK** — Odometer, Gear, CarInfo, Fuel | **NaviHelper, Fused Location, Gleo AI(STT·TTS)** |
 | 차량 앱 로직 | 운행 상태기계, 거리 계산, Foreground Service·알림, 보존·복구·놓친 운행, 주행 중 판정, Room, 차량 연결, inbox 수신, 엑셀 생성(POI), 검토 계산 | 목적지·좌표, 목적 추천 규칙, 운전자 확정·사용자 정렬, 거래처 등록 판단, 음성 입력(목적·주유 파싱), 영수증–운행 매칭, **SMTP 메일 발송**, SMTP 계정 보관 |
 | 서버 | — | **중계 서버** 전체(Spring Boot: 기기 등록·QR·Gemini OCR·inbox·배포, 운영 웹이 부를 admin API) |
 | 리스크 | Odometer 정밀도·백그라운드 콜백·절전 생존·POI 빌드 → **검증 1순위** | 범위가 넓음(SDK 3종 + 서버) → STT는 막히면 버림, admin API는 2차 |

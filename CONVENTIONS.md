@@ -14,7 +14,7 @@
 | | 앱 A — 차량 데이터·기록·출력 코어 | 앱 B — 맥락·판단·중계 | 프론트 |
 |---|---|---|---|
 | 한 줄 | 계기판을 읽어 운행을 만들고, 잃지 않고, 엑셀로 내보낸다 | 운행에 "어디로·왜·누가"를 붙이고, 폰·관리자 입력을 차로 잇고, 메일로 보낸다 | 모든 화면 |
-| SDK | Vehicle SDK (Odometer, DrivingMode, CarInfo, Fuel) | NaviHelper, Fused Location, Gleo AI (STT·TTS) | — |
+| SDK | Vehicle SDK (Odometer, Gear, CarInfo, Fuel) | NaviHelper, Fused Location, Gleo AI (STT·TTS) | — |
 | 기능 ID | F-01–05, 10–14, 16, 21, 23 | F-06–09, 15, 17–20, 22, 24, 30, 40–43, 50–54(API) | 화면 전부 |
 
 ### 1.2 폴더 소유

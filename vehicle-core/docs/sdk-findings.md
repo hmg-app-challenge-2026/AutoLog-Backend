@@ -57,3 +57,44 @@
 | 기타 | `registerApp(...)`(서버 연결용으로 보임), `setLocale`, `sendAudio` 존재 |
 
 **[검증 필요]** HYBRID가 `registerApp` 없이 동작하는지, `isFinal=true`가 한 번만 오는지, 앱에 RECORD_AUDIO 권한이 필요한지. 확인 전까지 `SpeechGateway.start()`가 실패하면 `available=false`로 두고 마이크 버튼을 숨긴다(F-09 예외).
+
+## Vehicle 2.3.2 — AAR 정적 분석 (앱 A, 2026-11-09)
+
+Gradle 캐시의 `ai.pleos.playground:Vehicle:2.3.2`(+ `vehicle-data:1.1.11`, `vehicle-aidl:1.1.1`)를 `javap`로 연 **시그니처**다. 값 범위·콜백 주기·에뮬레이터 동작은 아직 확인하지 않았다.
+
+### 진입점·서비스
+
+| 항목 | 확인한 사실 | 명세와 차이 |
+|---|---|---|
+| 생성·초기화 | `Vehicle(context)` → `initialize()` / `release()`. **둘 다 콜백 없음(void)** | 연결 완료 시점을 알 수 없다 → 첫 조회가 `onFailed`면 재시도(F-01 "5초×12") [검증 필요] |
+| 도메인 객체 | `getOdometer()`, `getGear()`, `getCarInfo()`, `getFuel()`, `getDrivingMode()`, `getBrake()` 등 | — |
+| 조회 형태 | `getXxx(onSuccess: (T) -> Unit, onFailed: (Exception) -> Unit)` | `sdkCall` 그대로 사용 가능 |
+| 리스너 형태 | `registerXxx(listener)` / `unregisterXxx(listener)`. 모든 리스너는 `VehicleListener.onFailed(Exception)`을 상속 | `sdkListenerFlow` 그대로 사용 가능 |
+| capability | `checkXxxCapabilities(onSuccess: (CapabilityConfig) -> Unit, onFailed)`. `CapabilityConfig.accessType`: `NONE / READ / WRITE / READ_WRITE` | 읽기 가능 = `READ` 또는 `READ_WRITE` |
+| 매니페스트(SDK가 병합) | `ai.pleos.playground.service.vehicle.VEHICLE_BINDING` 권한, `queries`에 `ai.pleos.playground.vehicle.VEHICLE_START`, 서비스 최소 버전 2.3.13 | 앱이 따로 선언할 필요 없음 |
+
+### AutoLog가 쓰는 API
+
+| 용도 | API | 값 타입 | 권한(`@RequiresPermission`) |
+|---|---|---|---|
+| 누적 주행거리(F-05) | `Odometer.checkCurrentDistanceDrivenCapabilities` · `getCurrentDistanceDriven` · `registerDistanceDriven(DistanceDrivenListener)` → `onDistanceDrivenUpdated(Float)` | **`Float`** | `pleos.car.permission.CAR_DRIVE` |
+| 기어(F-04, F-13) | `Gear.getCurrentGearSelectionState` · `registerGearSelection(GearSelectionListener)` → `onSelected(VehicleGear)` | `VehicleGear`: `GEAR_UNKNOWN, NEUTRAL, REVERSE, PARK, DRIVE, 1~9` | `CAR_DRIVE` |
+| 차량 식별(F-01) | `CarInfo.checkVINInfoCapabilities` · `getVINInfo` · `getCRNInfo` | `String` | `CAR_INFO` |
+| 연료량(F-18 보조) | `Fuel.checkFuelPercentCapabilities` · `getFuelPercent` · `registerFuelPercent` → `onFuelPercentUpdated(Integer)` | `Integer`(%) | `CAR_ENERGY` |
+
+내부 구현(`OdometerImpl`)은 `PleosPropertyIds.PERF_ODOMETER`를 읽는다. 에뮬레이터에서 VHAL `PERF_ODOMETER`(0x11600204)를 주입하면 값이 바뀔 것으로 보인다 [검증 필요].
+
+### 명세와 다른 점 (기술명세 2.2·2.4·2.8, 기능명세 F-04에 반영함)
+
+1. **`DrivingMode`는 기어가 아니다.** `DrivingModeType`은 `NORMAL / ECO / SPORT`(주행 모드)다. 기어 P/D는 **`Gear` API**로 읽는다. 기술명세 2.4·2.8의 "DrivingMode=P"는 "Gear=PARK"로 고쳐야 한다. 프론트 스펙 1.1.1의 1순위 "Pleos DrivingMode"도 같은 이유로 "Pleos Gear"가 된다.
+2. **Odometer 값은 `Float`다.** 18,443.9를 `Float`로 받아 그대로 `toDouble()`하면 18443.900390625가 된다. 저장할 때는 `Float.toString()` 기준 10진수(`BigDecimal`)로 바꿔 원본 표기를 지킨다. 10만 km대에서 `Float` 간격은 약 0.008 km라 0.1 km 표시에는 영향이 없다.
+3. **거리 단위 API가 없다.** `DistanceDisplayUnit(KILOMETER, MILE)` enum은 있지만 이것을 돌려주는 공개 메서드가 없다. km로 간주한다 [검증 필요: 에뮬레이터 단위 설정을 바꿔도 값이 km인지].
+4. **시동(Ignition)·주차 브레이크 공개 API가 없다.** `IgnitionState` enum과 `PleosPropertyIds.IGNITION_STATE`·`PARKING_BRAKE_ON`은 있지만 공개 메서드가 없다. 필요하면 AAOS `CarPropertyManager`(`android.car`, 권한 `android.car.permission.CAR_POWERTRAIN`)로 읽는다.
+5. **권한 이름:** 명세 2.2의 `CAR_MILEAGE`, `CAR_DRIVING_MODE`는 없다. Odometer·Gear 모두 **`CAR_DRIVE`**다.
+
+### 에뮬레이터에서 확인할 것 (표 #1·#2·#5)
+
+- `initialize()` 직후 조회가 실패하는지, 몇 초 뒤 성공하는지
+- `getCurrentDistanceDriven` 소수 자릿수, VHAL 주입 → 리스너 지연
+- `registerGearSelection`이 VHAL `GEAR_SELECTION`(0x11400400) 주입에 반응하는지
+- `getVINInfo`가 에뮬레이터에서 값을 주는지
