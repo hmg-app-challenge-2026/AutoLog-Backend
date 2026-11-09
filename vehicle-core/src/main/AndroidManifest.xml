@@ -3,6 +3,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- [앱 A] F-16 기록 서비스. 위치 권한이 필요한 location 타입 대신 specialUse (Android 14+) -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- [앱 A] Pleos Vehicle SDK 읽기 권한(AAR @RequiresPermission 확인, sdk-findings). CONTROL_* 권한은 선언하지 않는다. -->
     <uses-permission android:name="pleos.car.permission.CAR_DRIVE" />  <!-- Odometer, Gear -->
@@ -12,6 +14,14 @@
     <uses-permission android:name="pleos.car.permission.FUSED_LOCATION" />
 
     <application>
-        <!-- F-16 TripRecordingService 는 session/ 구현 시 추가 (foregroundServiceType 확인) -->
+        <!-- [앱 A] F-16 백그라운드 기록. 프로세스가 살아 있는 동안 포그라운드 -->
+        <service
+            android:name="kr.autolog.vehicle.session.TripRecordingService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Vehicle trip logging: keeps odometer and gear listeners alive while the driver uses navigation" />
+        </service>
     </application>
 </manifest>
