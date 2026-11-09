@@ -8,7 +8,7 @@
 | 2 | Odometer 단위·소수점·갱신 주기 | 콘솔 입력값 그대로(18443.9 → `Float` 18443.9). 리스너 지연 4–5 ms. 23.4 km 차이 정확. **감소 불가**(콘솔이 거부) | 에뮬레이터 Pleos_Connect_v2.1.0 (API 34, arm64) | 2026-11-09 | 에뮬레이터는 값을 바꿀 때만 콜백 → 실차 갱신 주기 [검증 필요]. `odometerListenerReceivesChangeAndDistanceIsExact` |
 | 3 | NaviHelper 목적지 콜백 | | | | |
 | 4 | Fused Location 콜백·accuracy | | | | |
-| 4a | 내비 전환 후 백그라운드 콜백 | | | | |
+| 4a | 내비 전환 후 백그라운드 콜백 | **부분 확인:** 앱 화면 없이 포그라운드 서비스만 있는 프로세스에서 Odometer·Gear 콜백 수신, 자동 시작 → 23.4 km → 기어 P 5초 확정까지 동작 | 에뮬레이터 Pleos_Connect_v2.1.0 | 2026-11-09 | 내비 앱을 전면에 띄운 상태·10분 생존은 [검증 필요]. `TripScenarioTest` |
 | 4b | 절전 후 프로세스 생존 | | | | |
 | 5 | CarInfo·Gear 제공 범위 | Gear P/D 조회·리스너 동작(지연 13–16 ms). VIN 제공(9자 — 에뮬레이터 더미로 보임). DrivingMode는 기어가 아님(주행 모드) | 에뮬레이터 Pleos_Connect_v2.1.0 (API 34, arm64) | 2026-11-09 | Gear API는 **deprecated**("use the Google GEAR_SELECTION property") → AAOS `GEAR_SELECTION` 폴백 준비. `gearParkAndDriveArriveByReadAndListener`, `recordsVinAvailability` |
 | 7 | XLSX 생성 속도·SMTP 587 | | | | |
