@@ -48,14 +48,19 @@ class ReportBuilder(
         val to = month.plusMonths(1).atDay(1).atStartOfDay(zone).toInstant().toEpochMilli()
         val trips = source.trips(from, to).sortedBy { it.startTime }
         val expenses = source.expenses(from, to).sortedBy { it.occurredAt }
+        // 배차는 이 달에 시작한 것만 본다(겹치기만 한 지난달 배차를 두 번 세지 않게).
+        // 맞춰 볼 운행은 경계 앞뒤까지 읽는다: 11/30 23시 배차를 12/1 0시 반에 운행해도 일치로 본다.
+        val margin = ReviewCalculator.SCHEDULE_WINDOW_MS
         val review = ReviewCalculator.calculate(
             trips,
             expenses,
-            source.schedules(from, to),
+            source.schedules(from, to).filter { it.startsAt in from until to },
             source.gasStations(),
             clock.millis(),
+            scheduleTrips = source.trips(from - margin - LONG_TRIP_MS, to + margin),
         )
-        source.saveReviewFlags(review.tripFlags)
+        // 이 달 모든 운행의 표시를 다시 쓴다. 해소된 운행은 빈 집합 → DB에서 지워진다.
+        source.saveReviewFlags(trips.associate { it.tripId to review.tripFlags[it.tripId].orEmpty() })
         val summary = Summary.of(trips, expenses, review)
         val plate = plateNo() ?: UNREGISTERED_PLATE
         val dir = outputDir().apply { mkdirs() }
@@ -243,6 +248,9 @@ class ReportBuilder(
 
     companion object {
         const val UNREGISTERED_PLATE = "미등록"
+
+        /** 배차 일치 판단 때 앞쪽으로 더 읽는 시간(달 시작 전에 출발한 긴 운행). */
+        const val LONG_TRIP_MS = 24 * 3_600_000L
 
         /** 10진수 그대로 더한다. Double로 더하면 23.4 + 12.8 + 8.6 + 5.0 = 49.800000000000004가 된다. */
         fun sumKm(values: List<Double?>): Double = values.filterNotNull().fold(java.math.BigDecimal.ZERO) { acc, v ->

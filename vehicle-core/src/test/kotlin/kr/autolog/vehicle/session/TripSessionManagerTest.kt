@@ -274,6 +274,60 @@ class TripSessionManagerTest {
     }
 
     @Test
+    fun `놓친 운행 배너를 둔 채 운전해도 추가하면 놓친 15 km 그대로다`() = runTest {
+        val rig = Rig(this) { dao, car ->
+            car.km = 18_458.9
+            dao.state = VehicleStateEntity(lastKnownOdometerKm = 18_443.9, lastKnownAt = 0)
+        }
+        // 배너를 누르지 않고 출발 → 자동 기록 + 체크포인트가 lastKnown을 덮어쓴다
+        val current = startedTrip(rig)
+        advanceTimeBy(10_000)
+        rig.car.drive(7.0)
+        runCurrent()
+
+        rig.session.acceptMissedTrip()
+
+        val missed = rig.dao.trips.value.values.single { it.timeEstimated }
+        assertEquals(15.0, missed.distanceKm!!, 0.0)
+        assertEquals(18_458.9, missed.endOdometerKm!!, 0.0)
+        // 지금 기록 중인 운행과 lastKnown은 건드리지 않는다
+        assertTrue(rig.stateValue is SessionState.Recording)
+        assertEquals(18_465.9, rig.dao.state!!.lastKnownOdometerKm!!, 0.0)
+        assertEquals(TripStatus.RECORDING, rig.dao.trip(current)!!.status)
+    }
+
+    @Test
+    fun `시작 복구 중에는 새 운행을 만들지 않는다`() = runTest {
+        val rig = Rig(this) { dao, car ->
+            dao.trips.value = mapOf("t-old" to recording(18_420.5))
+            car.readable = false // 계기판 재조회(최대 60초) 중
+        }
+
+        val r = rig.session.startSession()
+
+        assertTrue(r is StartResult.Failed)
+        assertEquals(listOf("t-old"), rig.dao.trips.value.keys.toList())
+        advanceTimeBy(61_000)
+        assertEquals("t-old", (rig.stateValue as SessionState.Recording).trip.tripId)
+    }
+
+    @Test
+    fun `주행 중 재시작으로 기록을 이어 가면 운행 시작 시각부터 정차로 보지 않는다`() = runTest {
+        val rig = Rig(this) { dao, car ->
+            dao.trips.value = mapOf("t-old" to recording(18_420.5).copy(startTime = -3_600_000))
+            car.currentGear = Gear.DRIVE // 신호 대기 중 재시작
+        }
+        assertTrue(rig.stateValue is SessionState.Recording)
+
+        advanceTimeBy(5_000)
+        assertTrue(rig.stateValue is SessionState.Recording)
+
+        advanceTimeBy(10_000)
+        val stop = rig.stateValue as SessionState.StopCandidate
+        assertTrue("정차 시작은 재개 이후여야 한다: ${stop.since}", stop.since >= 0)
+    }
+
+    @Test
     fun `놓친 운행을 무시하면 같은 계기판 값으로는 다시 묻지 않는다`() = runTest {
         val rig = Rig(this) { dao, car ->
             car.km = 18_458.9

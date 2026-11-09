@@ -22,6 +22,7 @@ import java.time.OffsetDateTime
  * - USERS·PLACES·SCHEDULES·RECIPIENTS: SERVER 분만 통째로 교체(LOCAL 보존) → 바로 ack
  * - RECEIPT: 확인 대기 목록에 넣고 **사용자가 확정할 때** ack(RoomDomainStore.ackReceipt). 확정했지만 ack가 실패한 것은 여기서 다시 보낸다
  * - 이미 반영한 편지(inbox_seen)는 다시 반영하지 않고 ack만 한다
+ * - 반영에 실패한 편지는 ack하지 않는다(서버에 남겨 다음에 다시 받는다)
  * - 서버가 꺼져 있으면 조용히 실패를 돌려줄 뿐, 로컬 기능을 막지 않는다
  */
 class InboxSync(
@@ -44,13 +45,17 @@ class InboxSync(
         var applied = 0
         for (item in items) {
             val first = !inbox.isSeen(item.id)
-            if (first || item.payload is ReceiptPayload) {
-                runCatching {
-                    apply(item)
-                }.onFailure { log("inbox ${item.id} ${item.kind} apply failed: ${it.message}") }
-                    .onSuccess { if (first) applied++ }
-            }
-            if (item.payload !is ReceiptPayload) {
+            val ok =
+                if (first || item.payload is ReceiptPayload) {
+                    runCatching { apply(item) }
+                        .onFailure { log("inbox ${item.id} ${item.kind} apply failed: ${it.message}") }
+                        .onSuccess { if (first) applied++ }
+                        .isSuccess
+                } else {
+                    true // 이미 반영한 편지 — ack만 다시 보낸다
+                }
+            // 반영에 실패한 편지는 ack하지 않는다. 서버에 남아 있어야 다음 동기화 때 다시 받는다.
+            if (ok && item.payload !is ReceiptPayload) {
                 inbox.markSeen(InboxSeenEntity(item.id, clock.millis()))
                 device.call { url, token -> ack(url, token, item.id) }
             }

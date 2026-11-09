@@ -79,7 +79,9 @@ class ReportBuilderTest {
         assertTrue("운전자 미확정" in log)
         assertTrue("카드 ****1234" in parts.getValue("xl/worksheets/sheet2.xml"))
         assertEquals(3, r.file.reviewCount) // d 운전자 미확정 + 7일 넘은 목적 미확정, e 거리 미확정
-        assertEquals(setOf("d", "e"), src.saved.keys)
+        // 이 달 모든 운행을 다시 쓴다: 표시가 있는 것은 d·e, 나머지는 빈 집합(해소 → DB에서 지움)
+        assertEquals(setOf("d", "e"), src.saved.filterValues { it.isNotEmpty() }.keys)
+        assertEquals(setOf("a", "b", "c", "d", "e"), src.saved.keys)
         assertTrue("해소 방법" in parts.getValue("xl/worksheets/sheet4.xml"))
     }
 
