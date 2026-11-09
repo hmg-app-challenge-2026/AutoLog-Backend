@@ -69,6 +69,7 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.coroutines.test)
+    testImplementation(libs.okhttp.mockwebserver)
 
     // SDK 탐침(에뮬레이터 + Pleos Virtual Console). ./gradlew :vehicle-core:connectedDebugAndroidTest
     androidTestImplementation(libs.androidx.test.runner)
