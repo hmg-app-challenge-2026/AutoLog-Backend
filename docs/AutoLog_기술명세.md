@@ -18,7 +18,7 @@ AutoLog_기획서.md의 7장(기술 아키텍처)과 4장(SDK 활용 계획)을 
 │  Pleos Connect 차량 (AAOS, Pleos_Connect_v2.1 / Android 14)        │
 │                                                               │
 │  AutoLog Vehicle App (Kotlin / Compose)  ← 장부의 원본            │
-│   ├─ Vehicle SDK ─────────► Odometer / DrivingMode / CarInfo / Fuel │
+│   ├─ Vehicle SDK ─────────► Odometer / Gear / CarInfo / Fuel      │
 │   ├─ NaviHelper SDK ──────► 목적지 / 경로상태 / 최근 목적지         │
 │   ├─ Fused Location SDK ──► 출발·도착 좌표                        │
 │   ├─ Gleo AI SDK ─────────► STT(목적·주유 음성 입력), TTS           │
@@ -267,21 +267,21 @@ android.nonTransitiveRClass=true
 kotlin.code.style=official
 ```
 
-### 2.2 권한 선언 **[확인됨: 네이밍 규칙 / 검증 필요: 도메인별 정확한 상수]**
+### 2.2 권한 선언 **[확인됨: Vehicle 2.3.2 AAR의 `@RequiresPermission`, 2026-11-09]**
 
-Vehicle SDK 권한은 `pleos.car.permission.CAR_*`(읽기) / `CONTROL_CAR_*`(제어) 형식이며 `protectionLevel="normal"`이라 런타임 다이얼로그 없이 매니페스트 선언만으로 동작한다. AutoLog는 읽기 권한만 선언한다.
+Vehicle SDK 권한은 `pleos.car.permission.CAR_*`(읽기) / `CONTROL_CAR_*`(제어) 형식이며 `protectionLevel="normal"`이라 런타임 다이얼로그 없이 매니페스트 선언만으로 동작한다. AutoLog는 읽기 권한만 선언한다. 상수는 `ai.pleos.playground.vehicle.constant.PleosPermission`에 있다.
 
 ```xml
-<!-- AndroidManifest.xml -->
-<uses-permission android:name="pleos.car.permission.CAR_INFO" />      <!-- CarInfo -->
-<uses-permission android:name="pleos.car.permission.CAR_MILEAGE" />   <!-- Odometer, 상수명 확인 필요 -->
-<uses-permission android:name="pleos.car.permission.CAR_ENERGY" />    <!-- Fuel / EvBattery -->
-<uses-permission android:name="pleos.car.permission.CAR_DRIVING_MODE" /> <!-- DrivingMode, 상수명 확인 필요 -->
-<uses-permission android:name="pleos.car.permission.FUSED_LOCATION" />  <!-- Fused Location [확인됨] -->
-<!-- NaviHelper·Gleo AI 권한은 각 SDK 연동 가이드의 퍼미션 네이밍 적용 -->
+<!-- vehicle-core AndroidManifest.xml -->
+<uses-permission android:name="pleos.car.permission.CAR_DRIVE" />     <!-- Odometer, Gear -->
+<uses-permission android:name="pleos.car.permission.CAR_INFO" />      <!-- CarInfo(VIN) -->
+<uses-permission android:name="pleos.car.permission.CAR_ENERGY" />    <!-- Fuel -->
+<uses-permission android:name="pleos.car.permission.FUSED_LOCATION" />  <!-- Fused Location -->
+<!-- 시동 상태(IGNITION_STATE)는 Pleos 공개 API가 없어 AAOS CarPropertyManager로 읽는다 -->
+<uses-permission android:name="android.car.permission.CAR_POWERTRAIN" />
 ```
 
-정확한 상수명은 각 API의 `@RequiresPermission` 어노테이션으로 확인한다(SDK가 어노테이션을 제공한다).
+이전 판의 `CAR_MILEAGE`·`CAR_DRIVING_MODE`는 SDK에 없다. Vehicle 서비스 바인딩 권한(`VEHICLE_BINDING`)과 `queries`는 SDK 매니페스트가 자동 병합한다.
 
 ### 2.3 SDK 콜백 → 코루틴 어댑터
 
@@ -310,78 +310,78 @@ fun <L, T> sdkListenerFlow(
 }
 ```
 
-### 2.4 Vehicle SDK 호출 패턴 **[확인됨]**
+### 2.4 Vehicle SDK 호출 패턴 **[확인됨: Vehicle 2.3.2 AAR 시그니처, 2026-11-09 / 에뮬레이터 동작은 `sdk-findings.md`]**
 
-공식 샘플이 제시하는 순서를 그대로 따른다: **initialize → capability 확인 → get → listener 등록 → (종료 시) unregister → release**.
+순서: **initialize → capability 확인 → get → listener 등록 → (종료 시) unregister → release**. `Vehicle.initialize()`는 콜백이 없어 연결 완료 시점을 알 수 없다. 그래서 첫 조회가 `onFailed`면 5초 간격으로 최대 12회 다시 시도한다(F-01). 조회는 전부 `getXxx(onSuccess, onFailed)` 형태이고, 리스너는 모두 `VehicleListener.onFailed(Exception)`을 상속한다.
 
 ```kotlin
-// vehicle/VehicleGateway.kt
-import ai.pleos.playground.vehicle.Vehicle          // 패키지 경로는 SDK 레퍼런스에서 확인
+// vehicle/VehicleGateway.kt — SDK import는 이 패키지에만 둔다
+import ai.pleos.playground.vehicle.Vehicle
+import ai.pleos.playground.vehicle.constant.control.VehicleGear
+import ai.pleos.playground.vehicle.listener.DistanceDrivenListener
+import ai.pleos.playground.vehicle.listener.GearSelectionListener
 
-class VehicleGateway(context: Context) {
+class VehicleGateway(context: Context, private val clock: Clock) {
     private val vehicle = Vehicle(context.applicationContext)
 
-    /** Vehicle Service 연결. 완료 전에는 도메인 API를 호출하지 않는다. */
-    fun start() = vehicle.initialize()
+    fun start() = vehicle.initialize()   // 콜백 없음
     fun stop()  = vehicle.release()
 
-    // ---- Odometer ---------------------------------------------------
-    // 도메인 객체는 vehicle.odometer(또는 getOdometer())로 얻는다.
-    // 메서드명은 샘플의 Door 패턴(checkXxxCapabilities / getCurrentXxx / registerXxx)을
-    // 따른다고 가정하며, 실제 시그니처는 SDK API 카탈로그에서 확인한다. [검증 필요]
-
-    suspend fun readTotalDistance(): OdometerReading {
+    // ---- Odometer: 누적 주행거리(km, Float) — 권한 CAR_DRIVE ----------
+    suspend fun readTotalDistance(): OdometerReading? = runCatching {
         val odo = vehicle.odometer
-        val (config, _) = sdkCall<Pair<Capability, Any?>> { ok, fail ->
-            odo.checkTotalDistanceCapabilities({ c, a -> ok(c to a) }, fail)
-        }
-        check(config.isAvailable) { "odometer unsupported on this vehicle" }
+        val cap = sdkCall { ok, fail -> odo.checkCurrentDistanceDrivenCapabilities(ok, fail) }
+        if (cap.accessType != AccessType.READ && cap.accessType != AccessType.READ_WRITE) return null
+        val raw: Float = sdkCall { ok, fail -> odo.getCurrentDistanceDriven(ok, fail) }
+        OdometerReading(km = raw.toExactKm(), at = clock.millis())
+    }.getOrNull()                         // 실패는 null → distanceSource = UNAVAILABLE (추정 금지)
 
-        val km   = sdkCall<Double> { ok, fail -> odo.getCurrentTotalDistance(ok, fail) }
-        val unit = sdkCall<String> { ok, fail -> odo.getDistanceUnit(ok, fail) }
-        return OdometerReading(km = km, unit = unit, at = System.currentTimeMillis())
-    }
-
-    fun totalDistanceFlow(): Flow<Double> = sdkListenerFlow(
-        register   = { l: TotalDistanceListener -> vehicle.odometer.registerTotalDistance(l) },
-        unregister = { l -> vehicle.odometer.unregisterTotalDistance(l) },
+    fun totalDistance(): Flow<Double> = sdkListenerFlow(
+        register   = { l: DistanceDrivenListener -> vehicle.odometer.registerDistanceDriven(l) },
+        unregister = { l -> vehicle.odometer.unregisterDistanceDriven(l) },
         makeListener = { emit, fail ->
-            object : TotalDistanceListener {
-                override fun onDistanceUpdated(km: Double) = emit(km)
-                override fun onFailed(e: Exception)        = fail(e)
+            object : DistanceDrivenListener {
+                override fun onDistanceDrivenUpdated(km: Float) = emit(km.toExactKm())
+                override fun onFailed(e: Exception)             = fail(e)
             }
         }
     )
 
-    // ---- DrivingMode (보조) ------------------------------------------
-    fun drivingModeFlow(): Flow<DrivingMode> = sdkListenerFlow(
-        register   = { l: DrivingModeListener -> vehicle.drivingMode.registerDrivingMode(l) },
-        unregister = { l -> vehicle.drivingMode.unregisterDrivingMode(l) },
+    // ---- Gear: P/R/N/D — 권한 CAR_DRIVE --------------------------------
+    fun gear(): Flow<VehicleGear> = sdkListenerFlow(
+        register   = { l: GearSelectionListener -> vehicle.gear.registerGearSelection(l) },
+        unregister = { l -> vehicle.gear.unregisterGearSelection(l) },
         makeListener = { emit, fail ->
-            object : DrivingModeListener {
-                override fun onChanged(mode: DrivingMode) = emit(mode)
-                override fun onFailed(e: Exception)       = fail(e)
+            object : GearSelectionListener {
+                override fun onSelected(gear: VehicleGear) = emit(gear)
+                override fun onFailed(e: Exception)        = fail(e)
             }
         }
     )
 }
 
-data class OdometerReading(val km: Double, val unit: String, val at: Long)
+/** Float 계기판 값을 10진수 표기 그대로 Double로. 18443.9f.toDouble()은 18443.900390625가 된다. */
+private fun Float.toExactKm(): Double = BigDecimal(toString()).toDouble()
+
+data class OdometerReading(val km: Double, val at: Long)
 ```
 
-SDK 콜백은 메인 스레드에서 올 수 있다. `Flow`는 `flowOn(Dispatchers.Default)`로 돌리고, Room 쓰기는 `withContext(Dispatchers.IO)`로 넘긴다.
+SDK 콜백은 메인 스레드에서 올 수 있다. `Flow`는 `flowOn(Dispatchers.Default)`로 돌리고, Room 쓰기는 주입받은 IO 디스패처로 넘긴다. Gateway는 SDK 타입(`VehicleGear`)을 밖으로 내보내지 않고 `session/`이 쓰는 자체 enum으로 바꿔서 내보낸다.
 
 **AutoLog가 쓰는 Vehicle SDK 도메인과 용도**
 
-| 도메인 | 조회 항목 | AutoLog 용도 | 호출 시점 | 상태 |
+| 도메인 | API | AutoLog 용도 | 권한 | 상태 |
 |---|---|---|---|---|
-| **Odometer** | 총 주행거리(total distance), 트립 거리/시간, 거리 단위 | 운행 시작·종료 시 누적거리 스냅샷, 주행 중 거리 표시 | 세션 시작/종료 시 `readTotalDistance()`, 주행 중 `totalDistanceFlow()` | [확인됨: 도메인 존재] [검증 필요: 소수점 정밀도·갱신 주기] |
-| **CarInfo** | 차량 기본 정보(모델, VIN 등 제공 범위 확인) | 차량 자동 등록·매칭 | 앱 최초 실행 1회 | [검증 필요: VIN 제공 여부] |
-| **DrivingMode** | 주행 모드 정보 | 보조 — 주행 중/정차 판단 힌트 | `drivingModeFlow()` | [검증 필요] |
-| **Fuel** | 연료 관련 상태·연비 | 주유 이벤트 보조 감지(연료량 급증) | listener | [확인됨: 도메인 존재, 보조 신호로만 사용] |
-| **EvBattery** | 배터리·충전 상태 | EV 차량의 충전비 확장(로드맵) | — | 확장 |
+| **Odometer** | `checkCurrentDistanceDrivenCapabilities` · `getCurrentDistanceDriven` · `registerDistanceDriven` (`Float`, km) | 운행 시작·종료 스냅샷, 10초 체크포인트, 주행 중 거리 | `CAR_DRIVE` | [확인됨: 시그니처] [검증 필요: 소수점·갱신 주기]. 내부적으로 VHAL `PERF_ODOMETER`를 읽는다 |
+| **Gear** | `getCurrentGearSelectionState` · `registerGearSelection` (`VehicleGear`: PARK·DRIVE·REVERSE·NEUTRAL·UNKNOWN·1~9) | 주차(P)·주행 판정, P 순간 즉시 저장 + 자동 종료(F-04, F-13) | `CAR_DRIVE` | [확인됨: 시그니처] [검증 필요: 에뮬레이터 반응] |
+| **CarInfo** | `checkVINInfoCapabilities` · `getVINInfo` · `getCRNInfo` (`String`) | 차량 식별 보조(설정 화면) | `CAR_INFO` | [검증 필요: 에뮬레이터에서 값 제공 여부] |
+| **Fuel** | `checkFuelPercentCapabilities` · `getFuelPercent` · `registerFuelPercent` (`Int`, %) | 주유 이벤트 보조 감지(연료량 급증) | `CAR_ENERGY` | [확인됨: 시그니처, 보조 신호로만 사용] |
+| (AAOS) 시동 | `CarPropertyManager` `IGNITION_STATE` | OFF·ACC가 되는 순간 즉시 확정(받으면 보너스) | `android.car.permission.CAR_POWERTRAIN` | Pleos 공개 API 없음. [검증 필요] |
+| **EvBattery** | — | EV 충전비 확장(로드맵) | — | 확장 |
 
-**사용하지 않는 것:** Door, Window, HVAC, Seat 등 제어 도메인 전부. Toll 도메인은 통행료 확장 시 검토.
+**정정(2026-11-09):** 이전 판은 `DrivingMode`를 기어 P/D로 가정했다. 실제 `DrivingMode`는 주행 모드(`NORMAL / ECO / SPORT`)라 AutoLog는 쓰지 않는다. 기어는 `Gear` 도메인으로 읽는다. 거리 단위(km/mile)를 돌려주는 공개 API도 없어서 km로 간주한다([검증 필요]).
+
+**사용하지 않는 것:** DrivingMode, Door, Window, HVAC, Seat 등 제어 도메인 전부. Toll 도메인은 통행료 확장 시 검토.
 
 ### 2.5 NaviHelper SDK 호출 패턴 **[확인됨]**
 
@@ -514,11 +514,12 @@ IDLE
  │  startSession()  [사용자 탭 or 자동 트리거]
  ▼
 RECORDING ──── 진입 시 origin 좌표 스냅샷(Fused Location) + TripRecordingService 시작. totalDistanceFlow로 distance 갱신(10초 체크포인트), navi events로 destination 갱신
- │  stopCandidate()  [정차 감지: RouteState=도착 / DrivingMode=P(→ 즉시 Odometer 재조회·저장) / Odometer 불변 10초 / 사용자 탭·알림 확인]
+ │  stopCandidate(reason)  [정차 감지: Gear=PARK(→ 즉시 Odometer 재조회·저장) / RouteState=도착 / Odometer 불변 10초 / 사용자 탭·알림 확인]
  ▼
-STOP_CANDIDATE ── 타이머 T_stop 시작 (가정 180초)
- │  ├─ T_stop 내 재출발 감지 → RECORDING (Stop 레코드만 남김)
- │  └─ T_stop 경과 or 사용자 종료 → FINALIZING
+STOP_CANDIDATE ── 이유별 대기 → deadlineAt (세션이 유일한 시계, 화면·알림은 deadlineAt만 본다)
+ │                 GEAR_P = T_GEAR_P_SEC 5초 · NO_MOVEMENT·NAVI_ARRIVED = T_STOP_SEC 180초 · 시동 OFF = 대기 없이 FINALIZING
+ │  ├─ 대기 중 재출발(MOVING) 또는 [계속 기록] → RECORDING (Stop 레코드만 남김)
+ │  └─ deadlineAt 경과 or [기록 종료] → FINALIZING
  ▼
 FINALIZING ── end_odometer 재조회, dest 좌표 스냅샷(Fused Location), distance = end − start, 검증
  │  ├─ 검증 OK  → PENDING_REVIEW (목적 확인 UI 노출)
@@ -575,8 +576,8 @@ class TripSessionManager(
                 .collect { km -> dao.checkpoint(trip.tripId, km, System.currentTimeMillis()) }
         }
         scope.launch {                          // 기어 P → 시동 OFF 직전일 가능성. 즉시 저장
-            vehicle.drivingModeFlow().filter { it == DrivingMode.P }
-                .collect { runCatching { vehicle.readTotalDistance() }.getOrNull()?.let { dao.checkpoint(trip.tripId, it.km, it.at) }; stopCandidate() }
+            vehicle.gear().filter { it == Gear.PARK }
+                .collect { vehicle.readTotalDistance()?.let { dao.checkpoint(trip.tripId, it.km, it.at) }; stopCandidate(StopReason.GEAR_P) }
         }
     }
 
@@ -595,7 +596,7 @@ class TripSessionManager(
 
     suspend fun finalize() = mutex.withLock {
         val trip = (state.value as? State.StopCandidate)?.trip ?: (state.value as? State.Recording)?.trip ?: return
-        val end = runCatching { vehicle.readTotalDistance() }.getOrNull()
+        val end = vehicle.readTotalDistance()            // 실패하면 null
         val fix = location.latest.value
         val finalized = trip.finalizeWith(end, fix)
         dao.upsert(finalized)
@@ -613,7 +614,7 @@ class TripSessionManager(
 | 단계 | 시작 조건 | 종료 조건 | 전제 |
 |---|---|---|---|
 | 기본(MVP 필수) | 앱 실행 후 "운행 시작" 탭 또는 앱 포그라운드 진입 시 자동 제안 | "운행 종료" 탭 또는 내비 도착 콜백 | 없음 |
-| 자동(지원 시) | `totalDistanceFlow` 증가 감지 / `drivingModeFlow` D 전환 | T_stop 동안 거리 불변 + DrivingMode P | 백그라운드 서비스 허용 여부 [검증 필요] |
+| 자동(지원 시) | `totalDistance()` 증가 감지 / `gear()` D 전환 | Gear=PARK 5초 / 거리 불변 180초 / 시동 OFF | 백그라운드 서비스 허용 여부 [검증 필요] |
 
 **검증 규칙(FINALIZING)** [가정]
 
@@ -694,7 +695,11 @@ Compose 화면 5개 + `TripSessionManager.state`를 구독하는 `HomeViewModel`
 | History | 정차만 | 이번 달 운행 목록(읽기) |
 | Settings | 정차만 | 차량·계정 연결, 동기화 상태 |
 
-주행 중 판정은 `totalDistanceFlow` 변화량 또는 `drivingModeFlow`를 쓰고, 판정 불가 시 **주행 중으로 간주**(보수적). Compose에서는 `isDriving` 상태 하나로 모든 입력 컴포저블의 `enabled`를 묶는다.
+주행 판정은 `TripSessionApi.motion`(`PARKED / STOPPED / MOVING`, 판정 불가 `null`) 하나로 한다.
+
+- 판정 우선순위: Gear(Pleos) → 기어 신호가 없으면 `PARKING_BRAKE_ON`·`IGNITION_STATE`(AAOS) → 그래도 없으면 거리 불변 60초를 주차로 본다.
+- `null`이면 **주행 중으로 간주**한다(보수적).
+- 화면은 이 값으로 사용 3단계(주차=전체 앱, 정차=Peek, 주행=화면 없음)와 입력 차단을 정한다.
 
 ### 2.11 TripRecordingService — 백그라운드 기록 (Foreground Service)
 
@@ -1033,7 +1038,7 @@ services:
 | 4 | Fused Location 콜백 | 좌표 로그 | 에뮬레이터 GPS 경로 재생 시 콜백 수신, 응답 필드(accuracy 유무) 기록 |
 | 4a | **백그라운드 콜백** | 로그 | Foreground Service 시작 → 내비 앱으로 전환 → Odometer 변경 → 서비스가 콜백 수신. 10분 유지 |
 | 4b | **절전 생존** | 로그 | 에뮬레이터 전원 OFF→ON 후 프로세스·Room 체크포인트 상태 |
-| 5 | CarInfo·DrivingMode 제공 범위 조사 | 지원 표 | VIN/모델 제공 여부, P/D 전환 감지 여부 기록 |
+| 5 | CarInfo·Gear 제공 범위 조사 | 지원 표 | VIN 제공 여부, Gear P/D 전환 콜백 수신 여부 기록 |
 | 6 | TripSessionManager + Room | 로컬 운행 기록 | 앱 강제 종료 후 복구 |
 | 7 | 차 안 POI XLSX + SMTP 발송 | 엑셀·메일 | 에뮬레이터에서 생성 < 5초, SMTP 587 전송 성공(막히면 HTTPS API) |
 | 8 | SpeechToText 목적 입력 | ReviewTrip 음성 입력 | 에뮬레이터 마이크 입력으로 인식 텍스트 수신 |
@@ -1047,7 +1052,7 @@ services:
 | Odometer 소수점 미제공 | 정수 km 기록, 오차 ±1 km 명시 |
 | Fused Location 콜백 없음 | NaviHelper `getCurrentLocationInfo()` → 직전 도착지 → 사용자 선택 순으로 폴백 |
 | Fused Location accuracy 필드 없음 | 반경 매칭에 고정 여유 50 m 적용 |
-| DrivingMode P/D 미제공 | 정차 = Odometer 불변 T_stop 이상 |
+| Gear 콜백 미수신 | AAOS `PARKING_BRAKE_ON`·`IGNITION_STATE` → 그래도 없으면 거리 불변 60초 = 주차, 정차 = Odometer 불변 10초 |
 | STT 인식률 저조(에뮬레이터) | 탭 입력만 시연, 음성은 영상으로 대체 |
 | 백그라운드 콜백 없음(4a) | 지속 알림은 정적 표시, 앱 복귀 시 Odometer 재조회로 거리 복구(2.12) |
 | 절전 후 프로세스 종료(4b) | 체크포인트 기반 복구(2.12). 이미 설계된 경로 |
@@ -1139,7 +1144,7 @@ app (화면) ──► vehicle-core (로직) ──► shared ◄── relay (�
 | | **앱 A — 차량 데이터·기록·출력 코어** | **앱 B — 맥락·판단·중계** |
 |---|---|---|
 | 한 줄 | 계기판을 읽어 운행을 만들고, 잃지 않고, 엑셀로 내보낸다 | 운행에 "어디로·왜·누가"를 붙이고, 폰·관리자 입력을 차로 잇고, 메일로 보낸다 |
-| 담당 SDK | **Vehicle SDK** — Odometer, DrivingMode, CarInfo, Fuel | **NaviHelper, Fused Location, Gleo AI(STT·TTS)** |
+| 담당 SDK | **Vehicle SDK** — Odometer, Gear, CarInfo, Fuel | **NaviHelper, Fused Location, Gleo AI(STT·TTS)** |
 | 기능명세 | F-01–05, 10–14, 16, 21, 23 | F-06–09, 15, 17–20, 22, 24, 30, 40–43, 50–54(API) |
 | `vehicle-core/` 패키지 | `vehicle/`(VehicleGateway) · `session/`(TripSessionManager, TripRecordingService·알림, Recovery, DrivingJudge) · `data/`(Room 엔티티·DAO·AutoLogDb, InboxSyncWorker, RelayApi) · `report/`(ReportBuilder·POI, ReviewCalculator) | `navi/` · `location/` · `speech/`(STT·TTS, PurposeVoiceParser, FuelVoiceParser) · `domain/`(PurposeRules, DriverResolver, UserOrdering, PlaceSuggester, ReceiptMatcher) · `mail/`(Mailer·SMTP, SmtpCredentialStore) |
 | 공동 | `core/`(Contracts.kt, SdkCall.kt) · `fake/` — A·B 공동 | 〃 |
@@ -1215,7 +1220,7 @@ interface MailApi {                              // 프론트: 보내기·설정
 
 | 기간 | 앱 A | 앱 B | 프론트 / 함께 |
 |---|---|---|---|
-| **11.08–09** | Odometer 콜백 → 내비 전환 후 콜백 → DrivingMode P/D → 절전 생존 → POI 빌드 | NaviHelper 목적지 → Fused Location → STT 아티팩트 → SMTP 587 → `relay/` 골격 | **함께:** 모노레포·`Contracts.kt`·`fake/`·`shared`. 결과 `vehicle-core/docs/sdk-findings.md` · 프론트: fake로 화면 착수 |
+| **11.08–09** | Odometer 콜백 → 내비 전환 후 콜백 → Gear P/D → 절전 생존 → POI 빌드 | NaviHelper 목적지 → Fused Location → STT 아티팩트 → SMTP 587 → `relay/` 골격 | **함께:** 모노레포·`Contracts.kt`·`fake/`·`shared`. 결과 `vehicle-core/docs/sdk-findings.md` · 프론트: fake로 화면 착수 |
 | 11.10–12 | VehicleGateway, TripSessionManager, Room·10초 체크포인트, DrivingJudge, DeviceApi | 서버 `/devices`·`/qr-tokens`·`/r/{code}/receipt`(Gemini)·`/inbox` · Navi·LocationGateway · PurposeRules + 단위 테스트 | 프론트: ProfilePicker·Home·ReviewTrip(fake) |
 | **11.13–15** | TripRecordingService·알림, Recovery, InboxSyncWorker, ReportBuilder(시트 1) | ReceiptMatcher·ReceiptApi, Mailer·SMTP 저장, UserOrdering | 프론트: 영수증 확인·보내기·설정·카메라 페이지·운영 웹 차량 화면 · **11.14 셋 통합 → 영상·APK, 11.15 제출** |
 | 11.16–23 | 놓친 운행, P 즉시 저장, ReportBuilder 4시트, ReviewCalculator | admin API(직원·장소·배차·수신자) + 배포, STT 목적·주유 파싱, DriverResolver, PlaceSuggester | 프론트: 운영 웹 4화면, 이력, 놓친 운행 배너 |
@@ -1246,4 +1251,4 @@ interface MailApi {                              // 프론트: 보내기·설정
 | 관리자 화면이 없는데 관리는? | 차가 월말에 운행기록부를 만들어 회계 담당자에게 메일로 보낸다. "검토" 열에 확인 필요 항목이 표시되고 운전자가 차 안에서 해소한다. 운영 웹은 차량·직원·장소·배차·수신자 등록만 한다. |
 | 운행 데이터는 서버에 있나? | 없다. 원본은 차량 Room이고 서버는 영수증 OCR과 기준 정보 배포만 중계한다. 다차량 합산이 필요해지면 `POST /trips` 하나를 추가해 사본을 올린다(로드맵). |
 | 왜 OCR만 서버인가? | 폰 사진이 차로 갈 경로가 서버뿐이다. Gemini 키도 APK 대신 서버에 두는 게 안전하다. |
-| SDK를 몇 개 쓰나? | Vehicle(Odometer·Fuel·CarInfo·DrivingMode), NaviHelper, Fused Location, Gleo AI(STT, 선택 TTS). 핵심 흐름은 Odometer + NaviHelper만으로 완성되고, 나머지는 품질을 올리되 빠져도 앱이 멈추지 않는다. |
+| SDK를 몇 개 쓰나? | Vehicle(Odometer·Gear·Fuel·CarInfo), NaviHelper, Fused Location, Gleo AI(STT, 선택 TTS). 핵심 흐름은 Odometer + NaviHelper만으로 완성되고, 나머지는 품질을 올리되 빠져도 앱이 멈추지 않는다. |

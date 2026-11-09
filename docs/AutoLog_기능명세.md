@@ -16,14 +16,14 @@
 | 용어 | 정의 |
 |---|---|
 | Trip(운행) | 운행 시작 Odometer 스냅샷부터 종료 스냅샷까지의 연속 이동 1건. **차 Room에만 존재** |
-| Stop(정차) | Trip 도중 T_stop(180초) 미만의 정차 |
+| Stop(정차) | Trip 도중 자동 종료 대기(기어 P 5초 / 그 외 180초) 안에 다시 출발한 정차 |
 | Odometer | Vehicle SDK가 제공하는 차량 계기판 누적 주행거리(km) |
 | Fix | Fused Location SDK 좌표 1건 |
 | Place(등록 장소) | 본사·지점·거래처·주유소·자택. 서버가 배포하거나 차 안에서 등록. 반경 150 m |
 | Schedule(배차) | 차량 사용 계획(일시·차량·운전자·목적지·목적). 운영 웹에서 등록 → 차로 배포 |
 | Inbox(우체통) | 서버가 차량별로 보관하는 "아직 차가 가져가지 않은 편지". 종류: RECEIPT / USERS / PLACES / SCHEDULES / RECIPIENTS |
 | 검토 | 사람 확인이 필요한 운행·비용 표시. **차가 계산**해 엑셀 "검토" 열로 출력 |
-| 정차 상태 | DrivingMode=P 또는 Odometer 변화 없음 ≥ 10초. 판정 불가 시 주행 중 |
+| 주차·정차 상태 | 주차 = Gear=PARK(기어 신호가 없으면 주차 브레이크·시동 → 거리 불변 60초). 정차 = P가 아니고 Odometer 변화 없음 ≥ 10초. 판정 불가 시 주행 중 |
 | 놓친 운행 | 앱이 기록하지 않았지만 계기판 차이로 존재가 확인되는 운행 |
 
 ## 2. 사용자와 역할
@@ -133,9 +133,9 @@
 
 | 항목 | 내용 |
 |---|---|
-| 신호(OR) | RouteState=도착 · DrivingMode=P(**즉시 Odometer 재조회·저장**) · Odometer 불변 10초 · 종료 탭/알림 확인 |
-| 흐름 | STOP_CANDIDATE + 180초 → 재출발 시 Stop 저장·복귀 / 만료·명시 종료 → FINALIZING |
-| 수용 기준 | 종료 탭 3초 내 ReviewTrip. 60초 정차 후 재출발 시 Trip 유지. 180초 후 자동 ReviewTrip |
+| 신호(OR) | Gear=PARK(**즉시 Odometer 재조회·저장**) · RouteState=도착 · Odometer 불변 10초 · 시동 OFF · 종료 탭/알림 확인 |
+| 흐름 | STOP_CANDIDATE(이유·`deadlineAt`) → 대기: 기어 P **5초**(헤즈업 알림 "기록을 마칠까요?" + 카운트다운 [계속 기록][기록 종료]) / 움직임 없음·내비 도착 **180초** / 시동 OFF 대기 없음 → 재출발·[계속 기록] 시 Stop 저장·복귀 / 만료·[기록 종료] → FINALIZING |
+| 수용 기준 | 종료 탭 3초 내 ReviewTrip. 기어 P 후 5초 안에 [계속 기록]이면 Trip 유지, 아니면 자동 ReviewTrip. 기어 신호 없이 60초 정차 후 재출발 시 Trip 유지, 180초 후 자동 ReviewTrip |
 
 ### F-05 운행거리 계산 (P0)
 
@@ -391,5 +391,5 @@
 | 절전 후 프로세스 생존 | F-10 | 체크포인트 복구로 충분 |
 | 차량 LTE에서 SMTP 587 | F-22 | 막히면 HTTPS 메일 API |
 | Apache POI 안드로이드 빌드 크기·속도 | F-21 | 느리면 `poi-ooxml-lite` 또는 CSV+템플릿 |
-| Odometer 소수점·주기, DrivingMode, Fused accuracy, CarInfo, STT | F-03~09 | 이전과 동일 |
+| Odometer 소수점·주기, Gear 콜백, Fused accuracy, CarInfo, STT | F-03~09 | 이전과 동일. Vehicle 2.3.2 시그니처는 `vehicle-core/docs/sdk-findings.md` |
 | Fuel SDK 연료량 갱신 주기 | F-18 | 거칠면 주유소 Place 정차만으로 감지 |
