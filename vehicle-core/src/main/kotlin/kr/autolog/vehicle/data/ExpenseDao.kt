@@ -29,6 +29,9 @@ interface ExpenseDao {
     @Query("SELECT * FROM expenses WHERE occurredAt >= :from AND occurredAt < :to ORDER BY occurredAt")
     suspend fun expensesBetween(from: Long, to: Long): List<ExpenseEntity>
 
+    @Query("SELECT * FROM trip_expense_links WHERE expenseId IN (:expenseIds)")
+    suspend fun linksForExpenses(expenseIds: List<String>): List<TripExpenseLinkEntity>
+
     @Query("SELECT * FROM trip_expense_links WHERE tripId = :tripId")
     suspend fun linksForTrip(tripId: String): List<TripExpenseLinkEntity>
 
