@@ -9,9 +9,100 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kr.autolog.shared.ReceiptFields
 import kr.autolog.shared.ReceiptPayload
+import java.time.YearMonth
 
 // ===== 앱 A 제공 =====
-// TODO(A): TripSessionApi, LocalStore, ReportApi, DeviceApi (기술명세 8.2)
+// 출발점: 프론트 초안(AutoLog-Frontend 스펙 6.6, R-2·R-7·R-9·R-10). 구현: session/·data/·report/.
+
+/**
+ * 운행 세션 (F-02–05, F-10, F-13, F-16). 세션이 유일한 시계다 — 화면은 [SessionState.StopCandidate.deadlineAt]만 보고
+ * 남은 시간을 계산한다. 구현: session/TripSessionManager.
+ */
+interface TripSessionApi {
+    /** 프론트: Home·Peek·자동 종료 안내. 앱 A: 알림. */
+    val state: StateFlow<SessionState>
+
+    /** 프론트: 사용 3단계(주차=전체 앱, 정차=Peek, 주행=화면 없음)와 입력 차단(F-13). null = 판정 불가 → 주행으로 본다. */
+    val motion: StateFlow<VehicleMotion?>
+
+    /** 프론트: 계기판 누적거리 표시. 못 읽으면 null(추정 금지). */
+    val totalOdometerKm: StateFlow<Double?>
+
+    /** 프론트: "기록되지 않은 운행 N km" 배너 (F-10). 없으면 null. */
+    val missedTrip: StateFlow<MissedTrip?>
+
+    /** 프론트: 오른쪽 위 운전자 배지. 다음 운행의 운전자. null = 나중에 선택. */
+    val currentDriver: StateFlow<String?>
+
+    /** 프론트: 운전자 선택 화면 (F-15). 다음 운행부터 적용하고 recent_users를 갱신한다. */
+    suspend fun selectDriver(userId: String?)
+
+    /** 프론트: [운행 시작] (F-02). 이미 기록 중이면 Failed. Odometer를 못 읽어도 시작한다(거리 미확정). */
+    suspend fun startSession(): StartResult
+
+    /** 프론트·알림: [기록 종료]. StopCandidate에서도 기다리지 않고 바로 끝낸다 (F-04). */
+    suspend fun finalize()
+
+    /** 프론트·알림: [계속 기록]. StopCandidate → Recording, 정차 기록(Stop)만 남긴다 (F-04). */
+    suspend fun resume()
+
+    /**
+     * 프론트: 목적 확정 (F-08, F-09). 지금 끝난 운행이든 지난 운행이든 [tripId]로 확정한다.
+     * [destinationLabel]은 목적지 없이 끝난 운행에서 사용자가 고른 도착지 이름(F-06). null이면 그대로 둔다.
+     */
+    suspend fun confirmPurpose(
+        tripId: String,
+        detail: PurposeDetail,
+        note: String?,
+        inputMode: InputMode,
+        destinationLabel: String? = null,
+    )
+
+    /** 프론트: 운전자 미확정 운행에 운전자 지정 (F-20). */
+    suspend fun assignDriver(tripId: String, userId: String, source: DriverSource)
+
+    /** 프론트: 놓친 운행 배너 [추가]. 거리 = 계기판 차이, 시각은 추정으로 표시한다 (F-10). */
+    suspend fun acceptMissedTrip()
+
+    /** 프론트: 놓친 운행 배너 [무시]. 같은 계기판 값으로는 다시 묻지 않는다 (F-10). */
+    suspend fun ignoreMissedTrip()
+
+    /** 프론트: 강제 종료 후 복구 다이얼로그 [기록하기][계속][삭제] (F-10). */
+    suspend fun resolveRecovery(choice: RecoveryChoice)
+}
+
+/** 화면이 읽는 운행 기록 (F-12). 원본은 Room. 구현: data/RoomLocalStore. */
+interface LocalStore {
+    /** 프론트: 이력·운행기록부 화면. [month](Asia/Seoul 기준)에 시작한 운행, 최신 순. */
+    fun trips(month: YearMonth): Flow<List<TripRow>>
+
+    /** 프론트: "확인 필요 N건". 목적 미확정(purpose == null)인 끝난 운행, 최신 순. */
+    val pendingReviews: Flow<List<TripRow>>
+
+    /** 프론트: Home "최근 운행 기록". 달과 상관없이 최근 [limit]건, 최신 순. */
+    fun recent(limit: Int): Flow<List<TripRow>>
+
+    /** 프론트: 영수증 확인 화면 (F-19). inbox로 받았지만 아직 확정·ack하지 않은 영수증. */
+    val receiptInbox: Flow<List<ReceiptPayload>>
+
+    /** 프론트: ReviewTrip 진입. 없으면 null. */
+    suspend fun trip(tripId: String): TripRow?
+}
+
+/** 운행기록부 XLSX (F-21, F-23). 구현: report/ReportBuilder. */
+interface ReportApi {
+    /** 프론트: [생성]·[보내기] 전. 결과 파일은 앱 B의 [MailApi.send]에 그대로 넘긴다. */
+    suspend fun build(month: YearMonth): ReportBuildResult
+}
+
+/** 서버 연결 (F-01, F-40). 서버 주소는 런타임 설정. 구현: data/DeviceRepository. */
+interface DeviceApi {
+    /** 프론트: 설정 화면 연결 상태. */
+    val connection: StateFlow<ConnectionState>
+
+    /** 프론트: 설정 화면 [연결]. 서버 주소와 운영 웹에서 받은 연결 코드. 성공하면 inbox를 한 번 받는다. */
+    suspend fun register(serverUrl: String, code: String): RegisterResult
+}
 
 /**
  * 앱 B 로직(추천·영수증 매칭·설정)이 읽고 쓰는 차 안 데이터. **앱 A가 Room으로 구현**해 B의 구현체에 주입한다.
