@@ -14,6 +14,7 @@ android {
     defaultConfig {
         minSdk = 28
         consumerProguardFiles("consumer-rules.pro")
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // 중계 서버 주소. 에뮬레이터에서 호스트 PC는 10.0.2.2
         buildConfigField("String", "RELAY_BASE_URL", "\"http://10.0.2.2:8080/\"")
     }
@@ -24,6 +25,11 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { buildConfig = true }
+
+    // 계측 테스트 APK 패키징: android-mail·activation의 중복 라이선스 파일
+    packaging {
+        resources.excludes += setOf("META-INF/LICENSE*", "META-INF/NOTICE*", "META-INF/*.kotlin_module")
+    }
 }
 
 ksp {
@@ -63,4 +69,10 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.coroutines.test)
+
+    // SDK 탐침(에뮬레이터 + Pleos Virtual Console). ./gradlew :vehicle-core:connectedDebugAndroidTest
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.junit)
+    androidTestImplementation(libs.coroutines.test)
 }
