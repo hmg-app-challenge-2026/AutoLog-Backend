@@ -110,6 +110,10 @@ data class DeviceRegisterResponse(
     @SerialName("device_token") val deviceToken: String,
     @SerialName("vehicle_id") val vehicleId: String,
     @SerialName("org_id") val orgId: String,
+    /** 차량 번호판. 운행기록부 파일명·메일 제목·설정 화면 표시에 쓴다. 옛 서버면 null. */
+    @SerialName("plate_no") val plateNo: String? = null,
+    /** 차종. 설정 화면 표시용. */
+    val model: String? = null,
 )
 
 // ---- 영수증 QR (F-30) ----

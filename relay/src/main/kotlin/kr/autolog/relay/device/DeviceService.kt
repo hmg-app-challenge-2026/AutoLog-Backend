@@ -41,6 +41,8 @@ class DeviceService(
             deviceToken = token,
             vehicleId = vehicle.vehicleId.toString(),
             orgId = vehicle.orgId.toString(),
+            plateNo = vehicle.plateNo,
+            model = vehicle.model,
         )
     }
 

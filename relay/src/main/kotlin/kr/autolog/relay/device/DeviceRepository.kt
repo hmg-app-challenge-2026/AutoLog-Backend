@@ -8,7 +8,13 @@ import java.util.UUID
 
 data class ConnectCode(val code: String, val vehicleId: UUID, val expiresAt: Instant, val usedAt: Instant?)
 
-data class DeviceVehicle(val vehicleId: UUID, val orgId: UUID, val vehicleCode: String)
+data class DeviceVehicle(
+    val vehicleId: UUID,
+    val orgId: UUID,
+    val vehicleCode: String,
+    val plateNo: String? = null,
+    val model: String? = null,
+)
 
 interface DeviceRepository {
     fun findConnectCode(code: String): ConnectCode?
@@ -46,7 +52,7 @@ class JdbcDeviceRepository(private val jdbc: JdbcClient) : DeviceRepository {
         .sql(
             """
                 UPDATE vehicles SET device_token_hash = :hash, registered_at = :at
-                WHERE vehicle_id = :id RETURNING vehicle_id, org_id, vehicle_code
+                WHERE vehicle_id = :id RETURNING vehicle_id, org_id, vehicle_code, plate_no, model
             """.trimIndent(),
         ).param("hash", tokenHash)
         .param("at", Timestamp.from(at))
@@ -55,7 +61,7 @@ class JdbcDeviceRepository(private val jdbc: JdbcClient) : DeviceRepository {
         .single()
 
     override fun findByTokenHash(tokenHash: String): DeviceVehicle? = jdbc
-        .sql("SELECT vehicle_id, org_id, vehicle_code FROM vehicles WHERE device_token_hash = :hash")
+        .sql("SELECT vehicle_id, org_id, vehicle_code, plate_no, model FROM vehicles WHERE device_token_hash = :hash")
         .param("hash", tokenHash)
         .query(::mapVehicle)
         .optional()
@@ -65,5 +71,7 @@ class JdbcDeviceRepository(private val jdbc: JdbcClient) : DeviceRepository {
         vehicleId = rs.getObject("vehicle_id", UUID::class.java),
         orgId = rs.getObject("org_id", UUID::class.java),
         vehicleCode = rs.getString("vehicle_code"),
+        plateNo = rs.getString("plate_no"),
+        model = rs.getString("model"),
     )
 }
