@@ -138,6 +138,20 @@ class TripSessionManagerTest {
     }
 
     @Test
+    fun `시동이 꺼지면 카운트다운 없이 바로 확정한다`() = runTest {
+        val rig = Rig(this)
+        startedTrip(rig)
+        advanceTimeBy(5_000)
+        rig.car.drive(23.4)
+        runCurrent()
+
+        rig.car.turnOff()
+        runCurrent()
+
+        assertEquals(23.4, (rig.stateValue as SessionState.PendingReview).distanceKm!!, 0.0)
+    }
+
+    @Test
     fun `종료 때 계기판을 못 읽으면 기어 P 때 읽어 둔 값으로 끝낸다`() = runTest {
         val rig = Rig(this)
         startedTrip(rig)

@@ -35,6 +35,7 @@ class VehicleGateway(
     private val dispatcher: CoroutineDispatcher = Dispatchers.Default,
 ) : VehicleSignals {
     private val vehicle = Vehicle(context.applicationContext)
+    private val carProps = CarPropertyGateway(context)
 
     @Volatile private var odometerReadable: Boolean? = null
 
@@ -102,6 +103,8 @@ class VehicleGateway(
         ).mapNotNull { it?.toGear() }
             .filter { it != Gear.UNKNOWN }
             .resilient("gear")
+
+    override val ignitionOff: Flow<Unit> = carProps.ignitionOff.flowOn(dispatcher)
 
     /** 차대번호. 설정 화면의 차량 식별 보조(F-01). 못 읽으면 null. */
     suspend fun readVin(): String? = try {

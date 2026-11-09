@@ -87,6 +87,7 @@ class TripSessionManager(
             recoverOnStart()
             launch { vehicle.odometer.collect { onOdometer(it) } }
             launch { vehicle.gear.collect { onGear(it) } }
+            launch { vehicle.ignitionOff.collect { onIgnitionOff() } }
             launch { context.arrivals.collect { onArrival() } }
             launch { context.destination.collect { onDestination(it) } }
             while (isActive) {
@@ -284,6 +285,14 @@ class TripSessionManager(
                 else -> Unit
             }
         }
+    }
+
+    /** 시동 OFF·ACC 순간 — 기다리지 않고 바로 확정한다(프론트 스펙 1.1.1 4순위). 프로세스가 곧 멈출 수 있다. */
+    private suspend fun onIgnitionOff() = mutex.withLock {
+        val s = _state.value
+        if (s !is SessionState.Recording && s !is SessionState.StopCandidate) return@withLock
+        log("ignition off → finalize")
+        finalizeLocked()
     }
 
     private suspend fun onArrival() = mutex.withLock {

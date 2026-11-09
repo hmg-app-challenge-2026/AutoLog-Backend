@@ -10,6 +10,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.After
@@ -105,6 +106,24 @@ class VehicleProbeTest {
         val vin = gateway.readVin()
 
         log("#5 VIN provided=${vin != null} length=${vin?.length}")
+    }
+
+    /** 콘솔 전원 OFF가 AAOS IGNITION_STATE로 오는지 기록한다(시동 OFF 즉시 확정, F-04). 오지 않아도 실패로 보지 않는다. */
+    @Test
+    fun recordsIgnitionStateFromPowerSimulator(): Unit = runBlocking {
+        val props = CarPropertyGateway(context)
+        val seen = mutableListOf<Int>()
+        val job = launch { props.ignitionState.collect { seen += it } }
+        delay(1_000)
+        console.setPower("On")
+        delay(1_500)
+        console.setPower("Off")
+        delay(2_000)
+        console.setPower("On")
+        delay(1_000)
+        job.cancel()
+
+        log("#5b ignition states seen=$seen")
     }
 
     private fun log(msg: String) = Log.i("AutoLog/probe", msg)
