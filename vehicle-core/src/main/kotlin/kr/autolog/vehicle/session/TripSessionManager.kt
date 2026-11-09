@@ -1,0 +1,486 @@
+package kr.autolog.vehicle.session
+
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kr.autolog.vehicle.core.ContextApi
+import kr.autolog.vehicle.core.DestinationInfo
+import kr.autolog.vehicle.core.DriverSource
+import kr.autolog.vehicle.core.InputMode
+import kr.autolog.vehicle.core.LiveTrip
+import kr.autolog.vehicle.core.MissedTrip
+import kr.autolog.vehicle.core.PurposeDetail
+import kr.autolog.vehicle.core.PurposeEngine
+import kr.autolog.vehicle.core.RecoveryChoice
+import kr.autolog.vehicle.core.SessionState
+import kr.autolog.vehicle.core.StartResult
+import kr.autolog.vehicle.core.StopReason
+import kr.autolog.vehicle.core.TripSessionApi
+import kr.autolog.vehicle.core.TripTiming
+import kr.autolog.vehicle.core.VehicleMotion
+import kr.autolog.vehicle.data.DistanceSource
+import kr.autolog.vehicle.data.PlaceSource
+import kr.autolog.vehicle.data.PurposeSource
+import kr.autolog.vehicle.data.RecentUserEntity
+import kr.autolog.vehicle.data.StopEntity
+import kr.autolog.vehicle.data.TripDao
+import kr.autolog.vehicle.data.TripEntity
+import kr.autolog.vehicle.data.TripStatus
+import kr.autolog.vehicle.data.VehicleStateEntity
+import kr.autolog.vehicle.session.RecoveryDecider.Decision
+import kr.autolog.vehicle.vehicle.Gear
+import kr.autolog.vehicle.vehicle.OdometerReading
+import kr.autolog.vehicle.vehicle.VehicleSignals
+import kr.autolog.vehicle.vehicle.retryUntilValue
+import java.time.Clock
+import java.util.UUID
+
+/**
+ * 운행 세션 상태기계 (F-02–05, F-10, F-13, 기술명세 2.8). [TripSessionApi]의 실구현.
+ *
+ * IDLE → RECORDING → STOP_CANDIDATE(이유별 대기) → FINALIZING → PENDING_REVIEW → (목적 확정) IDLE.
+ * 상태 전이는 [mutex]로 하나씩. 시작·10초 체크포인트·기어 P·종료는 Room에 즉시 커밋한다(CONVENTIONS 7.1-4).
+ * 세션이 유일한 시계다: 자동 종료는 [SessionState.StopCandidate.deadlineAt]이 지나면 1초 틱에서 일어난다.
+ * [start]는 서비스(또는 앱) 시작 때 한 번 — 복구 판단 후 차량 신호를 구독한다.
+ */
+class TripSessionManager(
+    private val vehicle: VehicleSignals,
+    private val dao: TripDao,
+    private val context: ContextApi,
+    private val purpose: PurposeEngine,
+    private val scope: CoroutineScope,
+    private val clock: Clock = Clock.systemUTC(),
+    private val vehicleId: () -> String = { UNREGISTERED_VEHICLE },
+    private val newId: () -> String = { UUID.randomUUID().toString() },
+    private val log: (String) -> Unit = {},
+) : TripSessionApi {
+    private val mutex = Mutex()
+    private val _state = MutableStateFlow<SessionState>(SessionState.Idle)
+    private val _motion = MutableStateFlow<VehicleMotion?>(null)
+    private val _totalOdometerKm = MutableStateFlow<Double?>(null)
+    private val _missedTrip = MutableStateFlow<MissedTrip?>(null)
+    private val _currentDriver = MutableStateFlow<String?>(null)
+
+    override val state: StateFlow<SessionState> = _state.asStateFlow()
+    override val motion: StateFlow<VehicleMotion?> = _motion.asStateFlow()
+    override val totalOdometerKm: StateFlow<Double?> = _totalOdometerKm.asStateFlow()
+    override val missedTrip: StateFlow<MissedTrip?> = _missedTrip.asStateFlow()
+    override val currentDriver: StateFlow<String?> = _currentDriver.asStateFlow()
+
+    @Volatile private var gear: Gear? = null
+
+    @Volatile private var lastKm: Double? = null
+
+    @Volatile private var lastMovedAt: Long? = null
+    private var observing: Job? = null
+
+    fun start() {
+        if (observing != null) return
+        observing = scope.launch {
+            recoverOnStart()
+            launch { vehicle.odometer.collect { onOdometer(it) } }
+            launch { vehicle.gear.collect { onGear(it) } }
+            launch { context.arrivals.collect { onArrival() } }
+            launch { context.destination.collect { onDestination(it) } }
+            while (isActive) {
+                delay(TICK_MS)
+                onTick()
+            }
+        }
+    }
+
+    fun stop() {
+        observing?.cancel()
+        observing = null
+    }
+
+    // ===== TripSessionApi =====
+
+    override suspend fun selectDriver(userId: String?) = mutex.withLock {
+        _currentDriver.value = userId
+        dao.saveVehicleState(vehicleState().copy(currentDriverUserId = userId))
+        if (userId == null) return@withLock
+        dao.upsertRecentUser(RecentUserEntity(userId, clock.millis()))
+        val s = _state.value as? SessionState.Recording ?: return@withLock
+        val trip = dao.trip(s.trip.tripId)?.takeIf { it.userId == null } ?: return@withLock
+        save(trip.copy(userId = userId, driverSource = DriverSource.DRIVER_SELECTED))
+        _state.value = s.copy(trip = s.trip.copy(driverUserId = userId))
+    }
+
+    override suspend fun startSession(): StartResult = mutex.withLock { startLocked() }
+
+    override suspend fun finalize() = mutex.withLock { finalizeLocked() }
+
+    override suspend fun resume() = mutex.withLock {
+        (_state.value as? SessionState.StopCandidate)?.let { resumeLocked(it) } ?: Unit
+    }
+
+    override suspend fun confirmPurpose(
+        tripId: String,
+        detail: PurposeDetail,
+        note: String?,
+        inputMode: InputMode,
+        destinationLabel: String?,
+    ) = mutex.withLock {
+        val t = dao.trip(tripId) ?: return@withLock
+        save(
+            t.copy(
+                purposeDetail = detail.name,
+                purposeNote = note ?: t.purposeNote,
+                purposeInputMode = inputMode.name,
+                purposeSource = PurposeSource.USER_CONFIRMED,
+                destinationLabel = destinationLabel ?: t.destinationLabel,
+                destinationSource = if (destinationLabel != null) PlaceSource.USER_SELECTED else t.destinationSource,
+                status = if (t.status == TripStatus.RECORDING) t.status else TripStatus.CONFIRMED,
+            ),
+        )
+        val s = _state.value
+        if (s is SessionState.PendingReview && s.trip.tripId == tripId) _state.value = SessionState.Idle
+    }
+
+    override suspend fun assignDriver(tripId: String, userId: String, source: DriverSource) = mutex.withLock {
+        val t = dao.trip(tripId) ?: return@withLock
+        save(t.copy(userId = userId, driverSource = source))
+        dao.upsertRecentUser(RecentUserEntity(userId, clock.millis()))
+    }
+
+    override suspend fun acceptMissedTrip() = mutex.withLock {
+        val missed = _missedTrip.value ?: return@withLock
+        val end = lastKm ?: return@withLock
+        val start = vehicleState().lastKnownOdometerKm ?: return@withLock
+        val now = clock.millis()
+        val trip = TripEntity(
+            tripId = newId(),
+            vehicleId = vehicleId(),
+            userId = null,
+            startTime = missed.lastKnownAt,
+            endTime = now,
+            timeEstimated = true,
+            startOdometerKm = start,
+            endOdometerKm = end,
+            lastOdometerKm = end,
+            distanceKm = DistancePolicy.difference(start, end),
+            purposeNote = MISSED_TRIP_NOTE,
+            status = TripStatus.PENDING_REVIEW,
+        )
+        dao.upsert(trip)
+        saveLastKnown(end, now)
+        _missedTrip.value = null
+        if (_state.value is SessionState.Idle) {
+            _state.value = SessionState.PendingReview(trip.toLive(), trip.distanceKm, suggestion = null)
+        }
+    }
+
+    override suspend fun ignoreMissedTrip() = mutex.withLock {
+        val now = lastKm ?: return@withLock
+        dao.saveVehicleState(
+            vehicleState().copy(lastKnownOdometerKm = now, lastKnownAt = clock.millis(), ignoredOdometerKm = now),
+        )
+        _missedTrip.value = null
+    }
+
+    override suspend fun resolveRecovery(choice: RecoveryChoice) = mutex.withLock {
+        val s = _state.value as? SessionState.NeedsRecovery ?: return@withLock
+        val trip = dao.trip(s.trip.tripId) ?: return@withLock
+        when (choice) {
+            RecoveryChoice.RECORD -> finishLocked(trip, vehicle.readOdometer()?.km ?: lastKm, clock.millis())
+            RecoveryChoice.CONTINUE ->
+                _state.value = SessionState.Recording(s.trip, liveKm(trip, lastKm), clock.millis())
+            RecoveryChoice.DELETE -> {
+                save(trip.copy(status = TripStatus.DISCARDED))
+                lastKm?.let { saveLastKnown(it, clock.millis()) }
+                _state.value = SessionState.Idle
+            }
+        }
+    }
+
+    // ===== 차량 신호 =====
+
+    private suspend fun recoverOnStart() {
+        val st = vehicleState()
+        _currentDriver.value = st.currentDriverUserId
+        gear = vehicle.readGear()
+        val now = retryUntilValue(READY_ATTEMPTS, READY_INTERVAL_MS) { vehicle.readOdometer() }
+        now?.let { observeKm(it, moved = false) }
+        mutex.withLock {
+            val rec = dao.findRecording()
+            val decision = RecoveryDecider.decide(
+                hasRecording = rec != null,
+                recordingLastKm = rec?.let { it.lastOdometerKm ?: it.startOdometerKm },
+                nowKm = now?.km,
+                lastKnownKm = st.lastKnownOdometerKm,
+                ignoredKm = st.ignoredOdometerKm,
+            )
+            log("recover: $decision")
+            when (decision) {
+                Decision.Nothing -> now?.let { saveLastKnown(it.km, it.at) }
+                Decision.ContinueRecording -> rec?.let { continueRecording(it) }
+                is Decision.AutoFinalize ->
+                    if (gear == Gear.DRIVE || gear == Gear.REVERSE) {
+                        continueRecording(rec!!) // 기어가 들어가 있으면 아직 운행 중(신호 대기 중 재시작 등)
+                    } else {
+                        finishLocked(rec!!, decision.endKm, rec.lastSeenAt ?: clock.millis())
+                    }
+                is Decision.AskRecovery -> _state.value = SessionState.NeedsRecovery(rec!!.toLive(), decision.extraKm)
+                is Decision.MissedTrip ->
+                    _missedTrip.value = MissedTrip(decision.gapKm, st.lastKnownAt ?: clock.millis())
+            }
+        }
+        updateMotion()
+    }
+
+    private suspend fun onOdometer(r: OdometerReading) {
+        val moved = lastKm?.let { r.km > it } ?: false
+        observeKm(r, moved)
+        mutex.withLock {
+            (_state.value as? SessionState.StopCandidate)?.let { if (moved) resumeLocked(it) }
+            val s = _state.value as? SessionState.Recording ?: return@withLock
+            val trip = dao.trip(s.trip.tripId) ?: return@withLock
+            var savedAt = s.lastSavedAt
+            if (r.at - s.lastSavedAt >= CHECKPOINT_MS) {
+                dao.checkpoint(trip.tripId, r.km, r.at)
+                saveLastKnown(r.km, r.at)
+                savedAt = r.at
+            }
+            _state.value = s.copy(liveKm = liveKm(trip, r.km), lastSavedAt = savedAt)
+        }
+        updateMotion()
+        autoStartIfDriving()
+    }
+
+    private suspend fun onGear(g: Gear) {
+        gear = g
+        updateMotion()
+        mutex.withLock {
+            when (val s = _state.value) {
+                is SessionState.Recording -> if (g == Gear.PARK) {
+                    // 기어 P → 시동 OFF 직전일 수 있다. 계기판을 바로 다시 읽어 저장한다.
+                    val r = vehicle.readOdometer()
+                    if (r != null) {
+                        observeKm(r, moved = false)
+                        dao.checkpoint(s.trip.tripId, r.km, r.at)
+                        saveLastKnown(r.km, r.at)
+                    }
+                    val trip = dao.trip(s.trip.tripId)
+                    enterStopLocked(s.trip, trip?.let { liveKm(it, lastKm) } ?: s.liveKm, StopReason.GEAR_P, null)
+                }
+                is SessionState.StopCandidate -> when {
+                    g == Gear.PARK && s.reason != StopReason.GEAR_P -> enterStopLocked(
+                        s.trip,
+                        s.liveKm,
+                        StopReason.GEAR_P,
+                        s.since,
+                    )
+                    g != Gear.PARK && s.reason == StopReason.GEAR_P -> resumeLocked(s)
+                    else -> Unit
+                }
+                else -> Unit
+            }
+        }
+    }
+
+    private suspend fun onArrival() = mutex.withLock {
+        val s = _state.value as? SessionState.Recording ?: return@withLock
+        enterStopLocked(s.trip, s.liveKm, StopReason.NAVI_ARRIVED, null)
+    }
+
+    private suspend fun onDestination(d: DestinationInfo?) = mutex.withLock {
+        val s = _state.value as? SessionState.Recording ?: return@withLock
+        if (d == null || d.label == s.trip.destinationLabel) return@withLock
+        val trip = dao.trip(s.trip.tripId) ?: return@withLock
+        dao.upsert(trip.withDestination(d))
+        _state.value = s.copy(trip = s.trip.copy(destinationLabel = d.label))
+    }
+
+    private suspend fun onTick() {
+        updateMotion()
+        mutex.withLock {
+            val now = clock.millis()
+            when (val s = _state.value) {
+                is SessionState.StopCandidate -> if (now >= s.deadlineAt) finalizeLocked()
+                is SessionState.Recording -> {
+                    val stillSince = lastMovedAt ?: s.trip.startTime
+                    if (lastKm != null && gear != Gear.PARK && now - stillSince >= DrivingJudge.MOVING_WINDOW_MS) {
+                        enterStopLocked(s.trip, s.liveKm, StopReason.NO_MOVEMENT, stillSince)
+                    }
+                }
+                else -> Unit
+            }
+        }
+    }
+
+    /** 운행이 없을 때 차가 움직이면 기록을 자동으로 시작한다(F-02). 주행 중에는 화면이 없으므로 묻지 않는다. */
+    private suspend fun autoStartIfDriving() {
+        val s = _state.value
+        if (_motion.value == VehicleMotion.MOVING && (s is SessionState.Idle || s is SessionState.PendingReview)) {
+            val r = startSession()
+            log("auto start: $r")
+        }
+    }
+
+    // ===== 전이 (mutex 안에서만) =====
+
+    private suspend fun startLocked(): StartResult {
+        val s = _state.value
+        if (s is SessionState.Recording || s is SessionState.StopCandidate || s is SessionState.NeedsRecovery) {
+            return StartResult.Failed("이미 기록 중입니다")
+        }
+        val now = clock.millis()
+        val odo = vehicle.readOdometer()
+        odo?.let { observeKm(it, moved = false) }
+        val fix = context.latestFix.value
+        val driver = _currentDriver.value
+        val trip = TripEntity(
+            tripId = newId(),
+            vehicleId = vehicleId(),
+            userId = driver,
+            driverSource = driver?.let { DriverSource.DRIVER_SELECTED },
+            startTime = now,
+            startOdometerKm = odo?.km,
+            lastOdometerKm = odo?.km,
+            lastSeenAt = now,
+            distanceSource = if (odo == null) DistanceSource.UNAVAILABLE else DistanceSource.VEHICLE_ODOMETER,
+            originLat = fix?.lat,
+            originLng = fix?.lng,
+            originSource = fix?.let { PlaceSource.FUSED_LOCATION },
+            rawSnapshotJson = "{\"start\":{\"km\":${odo?.km},\"at\":${odo?.at}}}",
+        ).let { t -> context.destination.value?.let { t.withDestination(it) } ?: t }
+        dao.upsert(trip)
+        _state.value = SessionState.Recording(trip.toLive(), liveKm = odo?.let { 0.0 }, lastSavedAt = now)
+        log("start ${trip.tripId} odo=${odo?.km}")
+        return StartResult.Started(trip.tripId)
+    }
+
+    private suspend fun finalizeLocked() {
+        val (live, endTime) = when (val s = _state.value) {
+            is SessionState.Recording -> s.trip to clock.millis()
+            is SessionState.StopCandidate -> s.trip to s.since
+            else -> return
+        }
+        val trip = dao.trip(live.tripId) ?: return
+        // 지금 못 읽으면 기어 P·체크포인트 때 실제로 읽어 둔 계기판 값으로 끝낸다(추정이 아니라 측정값).
+        val end = vehicle.readOdometer()?.km ?: trip.lastOdometerKm
+        finishLocked(trip, end, endTime)
+    }
+
+    private suspend fun finishLocked(trip: TripEntity, endKm: Double?, endTime: Long) {
+        val verdict = DistancePolicy.evaluate(trip.startOdometerKm, endKm, trip.startTime, endTime)
+        if (verdict is DistancePolicy.Verdict.NoMovement) {
+            save(trip.copy(status = TripStatus.DISCARDED, endTime = endTime, endOdometerKm = endKm))
+            _state.value = SessionState.Idle
+            log("discard ${trip.tripId}: no movement")
+            return
+        }
+        if (verdict is DistancePolicy.Verdict.Unavailable) log("distance unavailable ${trip.tripId}: ${verdict.reason}")
+        val distance = (verdict as? DistancePolicy.Verdict.Ok)?.distanceKm
+        val fix = context.latestFix.value
+        var done = trip.copy(
+            endTime = endTime,
+            endOdometerKm = endKm,
+            distanceKm = distance,
+            distanceSource = if (distance == null) DistanceSource.UNAVAILABLE else DistanceSource.VEHICLE_ODOMETER,
+            destinationLat = trip.destinationLat ?: fix?.lat,
+            destinationLng = trip.destinationLng ?: fix?.lng,
+            destinationSource = trip.destinationSource ?: fix?.let { PlaceSource.FUSED_LOCATION },
+            status = TripStatus.PENDING_REVIEW,
+            rawSnapshotJson = trip.rawSnapshotJson?.removeSuffix("}") + ",\"end\":{\"km\":$endKm,\"at\":$endTime}}",
+        )
+        val facts = done.toFacts()
+        val suggestion = runCatching { purpose.suggest(facts) }.getOrNull()
+        if (done.userId == null) {
+            runCatching { purpose.driverCandidate(facts) }.getOrNull()
+                ?.takeIf { it.source == DriverSource.SCHEDULE && it.confidence >= AUTO_DRIVER_CONFIDENCE }
+                ?.let { done = done.copy(userId = it.userId, driverSource = DriverSource.SCHEDULE) }
+        }
+        done = done.copy(
+            suggestedPurpose = suggestion?.detail?.name,
+            suggestedConfidence = suggestion?.confidence,
+            suggestedRule = suggestion?.rule?.name,
+            purposeSource = if (suggestion != null) PurposeSource.RULE_SUGGESTED else done.purposeSource,
+        )
+        save(done)
+        endKm?.let { saveLastKnown(it, endTime) }
+        _state.value = SessionState.PendingReview(done.toLive(), distance, suggestion)
+        log("finish ${trip.tripId} distance=$distance")
+    }
+
+    private fun enterStopLocked(trip: LiveTrip, liveKm: Double?, reason: StopReason, since: Long?) {
+        val now = clock.millis()
+        val waitSec = if (reason == StopReason.GEAR_P) TripTiming.T_GEAR_P_SEC else TripTiming.T_STOP_SEC
+        val start = since ?: now
+        _state.value =
+            SessionState.StopCandidate(trip, liveKm, reason, since = start, deadlineAt = now + waitSec * 1_000)
+    }
+
+    private suspend fun resumeLocked(s: SessionState.StopCandidate) {
+        val now = clock.millis()
+        if (now - s.since >= MIN_STOP_RECORD_MS) {
+            dao.insertStop(
+                StopEntity(
+                    tripId = s.trip.tripId,
+                    startTime = s.since,
+                    endTime = now,
+                    odometerKm = lastKm,
+                    reason = s.reason.name,
+                ),
+            )
+        }
+        val trip = dao.trip(s.trip.tripId)
+        _state.value = SessionState.Recording(
+            s.trip,
+            trip?.let { liveKm(it, lastKm) } ?: s.liveKm,
+            lastSavedAt = trip?.lastSeenAt ?: now,
+        )
+    }
+
+    private fun continueRecording(trip: TripEntity) {
+        _state.value = SessionState.Recording(trip.toLive(), liveKm(trip, lastKm), clock.millis())
+    }
+
+    // ===== 도우미 =====
+
+    private fun observeKm(r: OdometerReading, moved: Boolean) {
+        lastKm = r.km
+        _totalOdometerKm.value = r.km
+        if (moved) lastMovedAt = r.at
+    }
+
+    private fun updateMotion() {
+        _motion.value = DrivingJudge.judge(gear, lastKm != null, lastMovedAt, clock.millis())
+    }
+
+    private suspend fun save(trip: TripEntity) = dao.upsert(trip.copy(revision = trip.revision + 1))
+
+    private suspend fun vehicleState() = dao.vehicleState() ?: VehicleStateEntity()
+
+    private suspend fun saveLastKnown(km: Double, at: Long) {
+        dao.saveVehicleState(vehicleState().copy(lastKnownOdometerKm = km, lastKnownAt = at))
+    }
+
+    private fun liveKm(trip: TripEntity, km: Double?): Double? {
+        val start = trip.startOdometerKm ?: return null
+        return km?.let { maxOf(0.0, DistancePolicy.difference(start, it)) }
+    }
+
+    companion object {
+        const val UNREGISTERED_VEHICLE = "unregistered"
+        const val MISSED_TRIP_NOTE = "앱 미실행 중 운행(시각 추정)"
+        const val TICK_MS = 1_000L
+        const val CHECKPOINT_MS = 10_000L
+
+        /** 이보다 짧은 정차는 Stop으로 남기지 않는다(신호 대기 소음 제거). F-04 "60초 정차 후 재출발 시 Trip 유지". */
+        const val MIN_STOP_RECORD_MS = 60_000L
+
+        /** 배차로 찾은 운전자가 이 신뢰도 이상이면 자동 지정한다(기술명세 3.3 ② 0.95). 그 외 후보는 묻는다. */
+        const val AUTO_DRIVER_CONFIDENCE = 0.95
+        const val READY_ATTEMPTS = 12
+        const val READY_INTERVAL_MS = 5_000L
+    }
+}

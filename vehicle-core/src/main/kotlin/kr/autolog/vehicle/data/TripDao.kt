@@ -52,4 +52,8 @@ interface TripDao {
 
     @Upsert
     suspend fun saveVehicleState(state: VehicleStateEntity)
+
+    /** 운전자 선택 기록(최근 순 정렬용). */
+    @Upsert
+    suspend fun upsertRecentUser(user: RecentUserEntity)
 }

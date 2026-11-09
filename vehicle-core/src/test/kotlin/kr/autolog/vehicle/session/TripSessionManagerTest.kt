@@ -1,0 +1,298 @@
+package kr.autolog.vehicle.session
+
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
+import kr.autolog.vehicle.core.InputMode
+import kr.autolog.vehicle.core.PurposeDetail
+import kr.autolog.vehicle.core.RecoveryChoice
+import kr.autolog.vehicle.core.SessionState
+import kr.autolog.vehicle.core.StartResult
+import kr.autolog.vehicle.core.StopReason
+import kr.autolog.vehicle.core.TripTiming
+import kr.autolog.vehicle.core.VehicleMotion
+import kr.autolog.vehicle.data.DistanceSource
+import kr.autolog.vehicle.data.TripEntity
+import kr.autolog.vehicle.data.TripStatus
+import kr.autolog.vehicle.data.VehicleStateEntity
+import kr.autolog.vehicle.fake.FakeContext
+import kr.autolog.vehicle.fake.FakePurposeEngine
+import kr.autolog.vehicle.vehicle.Gear
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class TripSessionManagerTest {
+    private class Rig(scope: TestScope, setup: (InMemoryTripDao, FakeVehicle) -> Unit = { _, _ -> }) {
+        val clock = scope.virtualClock()
+        val car = FakeVehicle(clock)
+        val dao = InMemoryTripDao()
+        val ctx = FakeContext()
+        val engine = FakePurposeEngine()
+        var ids = 0
+        val session: TripSessionManager
+
+        init {
+            setup(dao, car)
+            session =
+                TripSessionManager(car, dao, ctx, engine, scope.backgroundScope, clock, { "car-1" }, { "t-${++ids}" })
+            session.start()
+            scope.runCurrent()
+        }
+
+        val stateValue get() = session.state.value
+    }
+
+    private suspend fun TestScope.startedTrip(rig: Rig): String {
+        rig.car.shift(Gear.DRIVE)
+        runCurrent()
+        return (rig.session.startSession() as StartResult.Started).tripId
+    }
+
+    @Test
+    fun `운행을 시작하면 Room에 기록 중 행이 즉시 생긴다`() = runTest {
+        val rig = Rig(this)
+
+        val id = startedTrip(rig)
+
+        val row = rig.dao.trip(id)!!
+        assertEquals(TripStatus.RECORDING, row.status)
+        assertEquals(18_420.5, row.startOdometerKm!!, 0.0)
+        assertEquals("판교 테크노밸리 거래처", row.destinationLabel)
+        assertEquals(0.0, (rig.stateValue as SessionState.Recording).liveKm!!, 0.0)
+    }
+
+    @Test
+    fun `달리면 liveKm가 오르고 10초마다 체크포인트를 남긴다`() = runTest {
+        val rig = Rig(this)
+        val id = startedTrip(rig)
+
+        advanceTimeBy(10_000)
+        rig.car.drive(23.4)
+        runCurrent()
+
+        assertEquals(23.4, (rig.stateValue as SessionState.Recording).liveKm!!, 0.0)
+        assertEquals(18_443.9, rig.dao.trip(id)!!.lastOdometerKm!!, 0.0)
+        assertEquals(VehicleMotion.MOVING, rig.session.motion.value)
+    }
+
+    @Test
+    fun `기어 P면 5초 카운트다운 뒤 목적 확인으로 가고 거리는 23점4 km다`() = runTest {
+        val rig = Rig(this)
+        val id = startedTrip(rig)
+        advanceTimeBy(5_000)
+        rig.car.drive(23.4)
+        runCurrent()
+
+        rig.car.shift(Gear.PARK)
+        runCurrent()
+        val candidate = rig.stateValue as SessionState.StopCandidate
+        advanceTimeBy(TripTiming.T_GEAR_P_SEC * 1_000 + 1_000)
+
+        assertEquals(StopReason.GEAR_P, candidate.reason)
+        assertEquals(candidate.since + TripTiming.T_GEAR_P_SEC * 1_000, candidate.deadlineAt)
+        val review = rig.stateValue as SessionState.PendingReview
+        assertEquals(23.4, review.distanceKm!!, 0.0)
+        assertEquals(PurposeDetail.CLIENT_VISIT, review.suggestion?.detail)
+        val row = rig.dao.trip(id)!!
+        assertEquals(TripStatus.PENDING_REVIEW, row.status)
+        assertEquals(DistanceSource.VEHICLE_ODOMETER, row.distanceSource)
+        assertEquals(18_443.9, rig.dao.state!!.lastKnownOdometerKm!!, 0.0)
+    }
+
+    @Test
+    fun `기어 P 뒤 5초 안에 다시 D면 운행이 이어진다`() = runTest {
+        val rig = Rig(this)
+        startedTrip(rig)
+        rig.car.drive(5.0)
+        runCurrent()
+
+        rig.car.shift(Gear.PARK)
+        runCurrent()
+        advanceTimeBy(2_000)
+        rig.car.shift(Gear.DRIVE)
+        advanceTimeBy(10_000)
+
+        assertTrue(rig.stateValue !is SessionState.PendingReview)
+    }
+
+    @Test
+    fun `D에서 10초 멈추면 180초 대기에 들어가고 다시 달리면 이어진다`() = runTest {
+        val rig = Rig(this)
+        val id = startedTrip(rig)
+        rig.car.drive(3.0)
+        runCurrent()
+
+        advanceTimeBy(12_000)
+        val candidate = rig.stateValue as SessionState.StopCandidate
+        advanceTimeBy(70_000)
+        rig.car.drive(0.5)
+        runCurrent()
+
+        assertEquals(StopReason.NO_MOVEMENT, candidate.reason)
+        assertTrue(candidate.deadlineAt - candidate.since >= TripTiming.T_STOP_SEC * 1_000)
+        assertTrue(rig.stateValue is SessionState.Recording)
+        assertEquals(1, rig.dao.stops(id).size)
+    }
+
+    @Test
+    fun `종료 때 계기판을 못 읽으면 기어 P 때 읽어 둔 값으로 끝낸다`() = runTest {
+        val rig = Rig(this)
+        startedTrip(rig)
+        rig.car.drive(23.4)
+        runCurrent()
+        rig.car.shift(Gear.PARK)
+        runCurrent()
+
+        rig.car.readable = false
+        advanceTimeBy(6_000)
+
+        assertEquals(23.4, (rig.stateValue as SessionState.PendingReview).distanceKm!!, 0.0)
+    }
+
+    @Test
+    fun `시작 계기판을 못 읽었으면 거리는 미확정이고 추정하지 않는다`() = runTest {
+        val rig = Rig(this)
+        rig.car.readable = false
+        val id = startedTrip(rig)
+        assertNull((rig.stateValue as SessionState.Recording).liveKm)
+        rig.car.readable = true
+        advanceTimeBy(120_000)
+
+        rig.session.finalize()
+
+        assertNull((rig.stateValue as SessionState.PendingReview).distanceKm)
+        assertEquals(DistanceSource.UNAVAILABLE, rig.dao.trip(id)!!.distanceSource)
+    }
+
+    @Test
+    fun `시작하고 바로 끄면 이동 없음으로 버린다`() = runTest {
+        val rig = Rig(this)
+        val id = startedTrip(rig)
+
+        rig.session.finalize()
+
+        assertTrue(rig.stateValue is SessionState.Idle)
+        assertEquals(TripStatus.DISCARDED, rig.dao.trip(id)!!.status)
+    }
+
+    @Test
+    fun `목적을 확정하면 확정 상태로 저장하고 Idle로 돌아간다`() = runTest {
+        val rig = Rig(this)
+        val id = startedTrip(rig)
+        rig.car.drive(23.4)
+        runCurrent()
+        rig.session.finalize()
+
+        rig.session.confirmPurpose(id, PurposeDetail.CLIENT_VISIT, "A고객사 미팅", InputMode.VOICE, "판교 A고객사")
+
+        val row = rig.dao.trip(id)!!
+        assertTrue(rig.stateValue is SessionState.Idle)
+        assertEquals(TripStatus.CONFIRMED, row.status)
+        assertEquals("CLIENT_VISIT", row.purposeDetail)
+        assertEquals("판교 A고객사", row.destinationLabel)
+        assertEquals("VOICE", row.purposeInputMode)
+    }
+
+    @Test
+    fun `운전자 없이 끝나면 배차 운전자를 자동으로 붙인다`() = runTest {
+        val rig = Rig(this)
+        val id = startedTrip(rig)
+        rig.car.drive(10.0)
+        runCurrent()
+
+        rig.session.finalize()
+
+        assertEquals("u-1", rig.dao.trip(id)!!.userId)
+    }
+
+    @Test
+    fun `차가 움직이면 운행을 자동으로 시작한다`() = runTest {
+        val rig = Rig(this)
+        rig.car.shift(Gear.DRIVE)
+        runCurrent()
+
+        rig.car.drive(0.2)
+        runCurrent()
+
+        assertTrue(rig.stateValue is SessionState.Recording)
+    }
+
+    @Test
+    fun `앱이 죽었다 켜졌는데 계기판이 그대로면 묻지 않고 확정한다`() = runTest {
+        val rig = Rig(this) { dao, car ->
+            car.km = 18_443.9
+            kotlinx.coroutines.runBlocking { dao.upsert(recording(lastKm = 18_443.9)) }
+        }
+
+        assertEquals(23.4, (rig.stateValue as SessionState.PendingReview).distanceKm!!, 0.0)
+    }
+
+    @Test
+    fun `앱이 죽은 동안 더 달렸으면 복구를 묻고 기록하기를 고르면 전체 거리로 끝낸다`() = runTest {
+        val rig = Rig(this) { dao, car ->
+            car.km = 18_448.9
+            kotlinx.coroutines.runBlocking { dao.upsert(recording(lastKm = 18_443.9)) }
+        }
+        assertEquals(5.0, (rig.stateValue as SessionState.NeedsRecovery).extraKm!!, 0.0)
+
+        rig.session.resolveRecovery(RecoveryChoice.RECORD)
+
+        assertEquals(28.4, (rig.stateValue as SessionState.PendingReview).distanceKm!!, 0.0)
+    }
+
+    @Test
+    fun `앱 없이 15 km 달렸으면 놓친 운행을 묻고 추가하면 15 km 운행이 생긴다`() = runTest {
+        val rig = Rig(this) { dao, car ->
+            car.km = 18_458.9
+            dao.state = VehicleStateEntity(lastKnownOdometerKm = 18_443.9, lastKnownAt = 0)
+        }
+        assertEquals(15.0, rig.session.missedTrip.value!!.gapKm, 0.0)
+
+        rig.session.acceptMissedTrip()
+
+        val review = rig.stateValue as SessionState.PendingReview
+        assertEquals(15.0, review.distanceKm!!, 0.0)
+        assertTrue(rig.dao.trip(review.trip.tripId)!!.timeEstimated)
+        assertNull(rig.session.missedTrip.value)
+    }
+
+    @Test
+    fun `놓친 운행을 무시하면 같은 계기판 값으로는 다시 묻지 않는다`() = runTest {
+        val rig = Rig(this) { dao, car ->
+            car.km = 18_458.9
+            dao.state = VehicleStateEntity(lastKnownOdometerKm = 18_443.9, lastKnownAt = 0)
+        }
+
+        rig.session.ignoreMissedTrip()
+
+        assertNull(rig.session.missedTrip.value)
+        assertEquals(18_458.9, rig.dao.state!!.ignoredOdometerKm!!, 0.0)
+    }
+
+    @Test
+    fun `운전자를 고르면 다음 운행에 쓰이고 최근 운전자로 남는다`() = runTest {
+        val rig = Rig(this)
+
+        rig.session.selectDriver("u-2")
+        val id = startedTrip(rig)
+
+        assertEquals("u-2", rig.dao.trip(id)!!.userId)
+        assertEquals("u-2", rig.dao.state!!.currentDriverUserId)
+        assertTrue("u-2" in rig.dao.recentUsers)
+    }
+
+    private companion object {
+        fun recording(lastKm: Double) = TripEntity(
+            tripId = "t-old",
+            vehicleId = "car-1",
+            userId = "u-1",
+            startTime = 0,
+            startOdometerKm = 18_420.5,
+            lastOdometerKm = lastKm,
+            lastSeenAt = 1_800_000,
+        )
+    }
+}
