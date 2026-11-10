@@ -5,6 +5,7 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kr.autolog.vehicle.core.InputMode
+import kr.autolog.vehicle.core.NaviCurrentLocation
 import kr.autolog.vehicle.core.PurposeDetail
 import kr.autolog.vehicle.core.RecoveryChoice
 import kr.autolog.vehicle.core.SessionState
@@ -13,6 +14,7 @@ import kr.autolog.vehicle.core.StopReason
 import kr.autolog.vehicle.core.TripTiming
 import kr.autolog.vehicle.core.VehicleMotion
 import kr.autolog.vehicle.data.DistanceSource
+import kr.autolog.vehicle.data.PlaceSource
 import kr.autolog.vehicle.data.TripEntity
 import kr.autolog.vehicle.data.TripStatus
 import kr.autolog.vehicle.data.VehicleStateEntity
@@ -62,6 +64,32 @@ class TripSessionManagerTest {
         assertEquals(18_420.5, row.startOdometerKm!!, 0.0)
         assertEquals("판교 테크노밸리 거래처", row.destinationLabel)
         assertEquals(0.0, (rig.stateValue as SessionState.Recording).liveKm!!, 0.0)
+    }
+
+    @Test
+    fun `운행 시작 시 내비 현재 위치 주소를 출발지로 저장한다`() = runTest {
+        val rig = Rig(this)
+        rig.ctx.setNaviLocation(NaviCurrentLocation(37.4, 127.1, " 서울 강남구 테헤란로 1 "))
+
+        val row = rig.dao.trip(startedTrip(rig))!!
+
+        assertEquals("서울 강남구 테헤란로 1", row.originLabel)
+        assertEquals(37.4, row.originLat!!, 0.0)
+        assertEquals(127.1, row.originLng!!, 0.0)
+        assertEquals(PlaceSource.NAVI_CURRENT, row.originSource)
+        assertEquals("서울 강남구 테헤란로 1", (rig.stateValue as SessionState.Recording).trip.originLabel)
+    }
+
+    @Test
+    fun `내비 현재 위치가 없으면 위치 SDK 좌표로 출발지를 저장한다`() = runTest {
+        val rig = Rig(this)
+
+        val row = rig.dao.trip(startedTrip(rig))!!
+
+        assertNull(row.originLabel)
+        assertEquals(FakeContext.SAMPLE_FIX.lat, row.originLat!!, 0.0)
+        assertEquals(FakeContext.SAMPLE_FIX.lng, row.originLng!!, 0.0)
+        assertEquals(PlaceSource.FUSED_LOCATION, row.originSource)
     }
 
     @Test
@@ -190,6 +218,24 @@ class TripSessionManagerTest {
 
         assertTrue(rig.stateValue is SessionState.Idle)
         assertEquals(TripStatus.DISCARDED, rig.dao.trip(id)!!.status)
+    }
+
+    @Test
+    fun `사용자가 기록 종료를 누르면 5초 대기 후 0 km 운행도 결과로 남긴다`() = runTest {
+        val rig = Rig(this)
+        val id = startedTrip(rig)
+
+        rig.session.requestStop()
+        val candidate = rig.stateValue as SessionState.StopCandidate
+        assertEquals(StopReason.USER_REQUEST, candidate.reason)
+        assertEquals(candidate.since + 5_000, candidate.deadlineAt)
+
+        advanceTimeBy(4_000)
+        assertTrue(rig.stateValue is SessionState.StopCandidate)
+        advanceTimeBy(2_000)
+
+        assertEquals(0.0, (rig.stateValue as SessionState.PendingReview).distanceKm!!, 0.0)
+        assertEquals(TripStatus.PENDING_REVIEW, rig.dao.trip(id)!!.status)
     }
 
     @Test
@@ -325,6 +371,88 @@ class TripSessionManagerTest {
         advanceTimeBy(10_000)
         val stop = rig.stateValue as SessionState.StopCandidate
         assertTrue("정차 시작은 재개 이후여야 한다: ${stop.since}", stop.since >= 0)
+    }
+
+    @Test
+    fun `계기판이 그대로여도 차속이 있으면 자동으로 기록을 시작한다`() = runTest {
+        val rig = Rig(this)
+        rig.car.shift(Gear.DRIVE)
+        runCurrent()
+
+        rig.car.speed(30.0)
+        runCurrent()
+
+        assertEquals(VehicleMotion.MOVING, rig.session.motion.value)
+        assertTrue(rig.stateValue is SessionState.Recording)
+    }
+
+    @Test
+    fun `같은 속도로 달리는 동안은 계기판이 1분간 안 바뀌어도 정차로 보지 않는다`() = runTest {
+        val rig = Rig(this)
+        startedTrip(rig)
+        rig.car.speed(20.0) // 이벤트는 한 번만 온다 — 값이 바뀔 때만 오는 차속 신호
+        runCurrent()
+
+        advanceTimeBy(60_000)
+
+        assertTrue(rig.stateValue is SessionState.Recording)
+        assertEquals(VehicleMotion.MOVING, rig.session.motion.value)
+    }
+
+    @Test
+    fun `차속이 0이 되고 10초 지나면 정차 대기로 들어간다`() = runTest {
+        val rig = Rig(this)
+        startedTrip(rig)
+        rig.car.speed(40.0)
+        runCurrent()
+        advanceTimeBy(5_000)
+
+        rig.car.speed(0.0)
+        runCurrent()
+        advanceTimeBy(DrivingJudge.MOVING_WINDOW_MS + 1_500)
+
+        assertEquals(StopReason.NO_MOVEMENT, (rig.stateValue as SessionState.StopCandidate).reason)
+    }
+
+    @Test
+    fun `정차 대기 중에 다시 속도가 나면 기록을 이어 간다`() = runTest {
+        val rig = Rig(this)
+        startedTrip(rig)
+        advanceTimeBy(DrivingJudge.MOVING_WINDOW_MS + 1_500)
+        assertTrue(rig.stateValue is SessionState.StopCandidate)
+
+        rig.car.speed(15.0)
+        runCurrent()
+
+        assertTrue(rig.stateValue is SessionState.Recording)
+    }
+
+    @Test
+    fun `차속은 거리에 들어가지 않는다 — 거리는 계기판 차이뿐`() = runTest {
+        val rig = Rig(this)
+        startedTrip(rig)
+        rig.car.speed(130.0)
+        runCurrent()
+        advanceTimeBy(30_000)
+
+        assertEquals(0.0, (rig.stateValue as SessionState.Recording).liveKm!!, 0.0)
+
+        rig.car.drive(2.5)
+        runCurrent()
+        assertEquals(2.5, (rig.stateValue as SessionState.Recording).liveKm!!, 0.0)
+    }
+
+    @Test
+    fun `기어 P 대기 중에는 차속이 있어도 재개하지 않는다`() = runTest {
+        val rig = Rig(this)
+        startedTrip(rig)
+        rig.car.shift(Gear.PARK)
+        runCurrent()
+
+        rig.car.speed(10.0)
+        runCurrent()
+
+        assertEquals(StopReason.GEAR_P, (rig.stateValue as SessionState.StopCandidate).reason)
     }
 
     @Test

@@ -10,6 +10,7 @@ import kr.autolog.vehicle.core.ArrivalInfo
 import kr.autolog.vehicle.core.ContextApi
 import kr.autolog.vehicle.core.DestinationInfo
 import kr.autolog.vehicle.core.LocationFix
+import kr.autolog.vehicle.core.NaviCurrentLocation
 
 /**
  * [ContextApi] 가짜. 판교 거래처로 가는 중인 상태로 시작한다.
@@ -23,12 +24,15 @@ class FakeContext(
     private val _destination = MutableStateFlow(destination)
     private val _latestFix = MutableStateFlow(fix)
     private val _arrivals = MutableSharedFlow<ArrivalInfo>(extraBufferCapacity = 8)
+    private var naviLocation: NaviCurrentLocation? = null
 
     override val destination: StateFlow<DestinationInfo?> = _destination.asStateFlow()
     override val latestFix: StateFlow<LocationFix?> = _latestFix.asStateFlow()
     override val arrivals: Flow<ArrivalInfo> = _arrivals.asSharedFlow()
 
     override suspend fun freshFix(): LocationFix? = _latestFix.value
+
+    override suspend fun currentNaviLocation(): NaviCurrentLocation? = naviLocation
 
     override suspend fun recentDestinations(): List<DestinationInfo> = recent
 
@@ -38,6 +42,10 @@ class FakeContext(
 
     fun setFix(f: LocationFix?) {
         _latestFix.value = f
+    }
+
+    fun setNaviLocation(location: NaviCurrentLocation?) {
+        naviLocation = location
     }
 
     fun arrive(at: Long = System.currentTimeMillis()) {

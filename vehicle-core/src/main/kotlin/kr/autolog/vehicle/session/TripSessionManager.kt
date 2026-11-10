@@ -80,6 +80,9 @@ class TripSessionManager(
 
     @Volatile private var lastMovedAt: Long? = null
 
+    /** 마지막 차속(km/h). 차속 신호가 없는 차면 계속 null — 계기판만으로 판단한다. */
+    @Volatile private var speedKph: Double? = null
+
     /** 지금 기록(또는 재개)을 시작한 시각. '움직임 없음' 판단은 이보다 앞선 시각을 기준으로 삼지 않는다. */
     @Volatile private var watchFrom: Long = 0
 
@@ -99,6 +102,7 @@ class TripSessionManager(
             launch { vehicle.odometer.collect { onOdometer(it) } }
             launch { vehicle.gear.collect { onGear(it) } }
             launch { vehicle.ignitionOff.collect { onIgnitionOff() } }
+            launch { vehicle.speedKph.collect { onSpeed(it) } }
             launch { context.arrivals.collect { onArrival() } }
             launch { context.destination.collect { onDestination(it) } }
             while (isActive) {
@@ -127,6 +131,11 @@ class TripSessionManager(
     }
 
     override suspend fun startSession(): StartResult = mutex.withLock { startLocked() }
+
+    override suspend fun requestStop() = mutex.withLock {
+        val s = _state.value as? SessionState.Recording ?: return@withLock
+        enterStopLocked(s.trip, s.liveKm, StopReason.USER_REQUEST, null)
+    }
 
     override suspend fun finalize() = mutex.withLock { finalizeLocked() }
 
@@ -296,6 +305,26 @@ class TripSessionManager(
         autoStartIfDriving()
     }
 
+    /**
+     * 차속 변화. 일정 속도 이상이면 "움직였다"로 기록한다(거리는 바꾸지 않는다).
+     * 계기판이 아직 안 바뀌었어도 자동 시작하고, 정차 대기 중이면 기록을 이어 간다.
+     */
+    private suspend fun onSpeed(kph: Double) {
+        val now = clock.millis()
+        speedKph = kph
+        val moving = DrivingJudge.isMovingSpeed(kph)
+        if (moving) lastMovedAt = now
+        updateMotion()
+        if (moving && gear != Gear.PARK) {
+            mutex.withLock {
+                (_state.value as? SessionState.StopCandidate)
+                    ?.takeIf { it.reason != StopReason.GEAR_P }
+                    ?.let { resumeLocked(it) }
+            }
+            autoStartIfDriving()
+        }
+    }
+
     private suspend fun onGear(g: Gear) {
         gear = g
         updateMotion()
@@ -313,7 +342,7 @@ class TripSessionManager(
                     enterStopLocked(s.trip, trip?.let { liveKm(it, lastKm) } ?: s.liveKm, StopReason.GEAR_P, null)
                 }
                 is SessionState.StopCandidate -> when {
-                    g == Gear.PARK && s.reason != StopReason.GEAR_P -> enterStopLocked(
+                    g == Gear.PARK && s.reason !in setOf(StopReason.GEAR_P, StopReason.USER_REQUEST) -> enterStopLocked(
                         s.trip,
                         s.liveKm,
                         StopReason.GEAR_P,
@@ -349,6 +378,8 @@ class TripSessionManager(
     }
 
     private suspend fun onTick() {
+        // 차속 이벤트는 값이 바뀔 때만 올 수 있다. 같은 속도로 달리는 동안에도 "움직이는 중"을 유지한다.
+        if (DrivingJudge.isMovingSpeed(speedKph) && gear != Gear.PARK) lastMovedAt = clock.millis()
         updateMotion()
         mutex.withLock {
             val now = clock.millis()
@@ -385,7 +416,8 @@ class TripSessionManager(
         val now = clock.millis()
         val odo = vehicle.readOdometer()
         odo?.let { observeKm(it, moved = false) }
-        val fix = context.latestFix.value
+        val naviLocation = context.currentNaviLocation()
+        val fix = if (naviLocation == null) context.freshFix() else null
         val driver = _currentDriver.value
         val trip = TripEntity(
             tripId = newId(),
@@ -397,9 +429,14 @@ class TripSessionManager(
             lastOdometerKm = odo?.km,
             lastSeenAt = now,
             distanceSource = if (odo == null) DistanceSource.UNAVAILABLE else DistanceSource.VEHICLE_ODOMETER,
-            originLat = fix?.lat,
-            originLng = fix?.lng,
-            originSource = fix?.let { PlaceSource.FUSED_LOCATION },
+            originLabel = naviLocation?.address?.trim()?.takeIf { it.isNotEmpty() },
+            originLat = naviLocation?.lat ?: fix?.lat,
+            originLng = naviLocation?.lng ?: fix?.lng,
+            originSource = when {
+                naviLocation != null -> PlaceSource.NAVI_CURRENT
+                fix != null -> PlaceSource.FUSED_LOCATION
+                else -> null
+            },
             rawSnapshotJson = "{\"start\":{\"km\":${odo?.km},\"at\":${odo?.at}}}",
         ).let { t -> context.destination.value?.let { t.withDestination(it) } ?: t }
         dao.upsert(trip)
@@ -410,27 +447,32 @@ class TripSessionManager(
     }
 
     private suspend fun finalizeLocked() {
-        val (live, endTime) = when (val s = _state.value) {
-            is SessionState.Recording -> s.trip to clock.millis()
-            is SessionState.StopCandidate -> s.trip to s.since
+        val (live, endTime, userRequested) = when (val s = _state.value) {
+            is SessionState.Recording -> Triple(s.trip, clock.millis(), false)
+            is SessionState.StopCandidate -> Triple(s.trip, s.since, s.reason == StopReason.USER_REQUEST)
             else -> return
         }
         val trip = dao.trip(live.tripId) ?: return
         // 지금 못 읽으면 기어 P·체크포인트 때 실제로 읽어 둔 계기판 값으로 끝낸다(추정이 아니라 측정값).
         val end = vehicle.readOdometer()?.km ?: trip.lastOdometerKm
-        finishLocked(trip, end, endTime)
+        finishLocked(trip, end, endTime, userRequested)
     }
 
-    private suspend fun finishLocked(trip: TripEntity, endKm: Double?, endTime: Long) {
+    private suspend fun finishLocked(trip: TripEntity, endKm: Double?, endTime: Long, userRequested: Boolean = false) {
         val verdict = DistancePolicy.evaluate(trip.startOdometerKm, endKm, trip.startTime, endTime)
-        if (verdict is DistancePolicy.Verdict.NoMovement) {
+        if (verdict is DistancePolicy.Verdict.NoMovement && !userRequested) {
             save(trip.copy(status = TripStatus.DISCARDED, endTime = endTime, endOdometerKm = endKm))
             _state.value = SessionState.Idle
             log("discard ${trip.tripId}: no movement")
             return
         }
         if (verdict is DistancePolicy.Verdict.Unavailable) log("distance unavailable ${trip.tripId}: ${verdict.reason}")
-        val distance = (verdict as? DistancePolicy.Verdict.Ok)?.distanceKm
+        // 사용자가 직접 종료한 0 km 운행도 결과 화면에서 확인할 수 있게 남긴다.
+        val distance = when (verdict) {
+            is DistancePolicy.Verdict.Ok -> verdict.distanceKm
+            DistancePolicy.Verdict.NoMovement -> 0.0
+            is DistancePolicy.Verdict.Unavailable -> null
+        }
         val fix = context.latestFix.value
         var done = trip.copy(
             endTime = endTime,
@@ -464,7 +506,11 @@ class TripSessionManager(
 
     private fun enterStopLocked(trip: LiveTrip, liveKm: Double?, reason: StopReason, since: Long?) {
         val now = clock.millis()
-        val waitSec = if (reason == StopReason.GEAR_P) TripTiming.T_GEAR_P_SEC else TripTiming.T_STOP_SEC
+        val waitSec = if (reason == StopReason.GEAR_P || reason == StopReason.USER_REQUEST) {
+            TripTiming.T_GEAR_P_SEC
+        } else {
+            TripTiming.T_STOP_SEC
+        }
         val start = since ?: now
         _state.value =
             SessionState.StopCandidate(trip, liveKm, reason, since = start, deadlineAt = now + waitSec * 1_000)
@@ -506,7 +552,7 @@ class TripSessionManager(
     }
 
     private fun updateMotion() {
-        _motion.value = DrivingJudge.judge(gear, lastKm != null, lastMovedAt, clock.millis())
+        _motion.value = DrivingJudge.judge(gear, lastKm != null, lastMovedAt, clock.millis(), speedKph)
     }
 
     private suspend fun save(trip: TripEntity) = dao.upsert(trip.copy(revision = trip.revision + 1))

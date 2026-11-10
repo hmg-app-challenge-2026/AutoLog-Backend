@@ -158,6 +158,9 @@ data class LocationFix(
     val timestampMs: Long,
 )
 
+/** 내비가 알려 준 현재 위치. 주소가 없을 수도 있다. */
+data class NaviCurrentLocation(val lat: Double, val lng: Double, val address: String?)
+
 // ===== 앱 B 제공: 목적·운전자 (F-08, F-15, F-20) =====
 
 /** 국세청 운행기록부 구분 (기획서 3.2). */

@@ -128,3 +128,18 @@ Gradle 캐시의 `ai.pleos.playground:Vehicle:2.3.2`(+ `vehicle-data:1.1.11`, `v
 | `foregroundServiceType=specialUse` | 시작 허용, 알림 표시 확인 | 기록 서비스(#21) |
 | AAOS `IGNITION_STATE` | 콘솔 전원 시뮬레이터(Off/On)를 바꿔도 **값이 오지 않음**(초기값도 없음) | 시동 OFF 즉시 확정은 실차 [검증 필요]. 없으면 기어 P 5초·복구 경로로 끝난다 |
 | Fuel | 콘솔 기능 목록에 연료가 없음(EV 구성) | 주유 감지(F-18 보조)는 실차 [검증 필요] |
+
+## 차속 PERF_VEHICLE_SPEED — 에뮬레이터 확인 (앱 B, 2026-11-10)
+
+Pleos Vehicle SDK 2.3.2에는 차속 공개 API가 없다(내부 상수 `PleosPropertyIds.PERF_VEHICLE_SPEED`만 있음). 그래서 AAOS `CarPropertyManager`의 `VehiclePropertyIds.PERF_VEHICLE_SPEED`(m/s, Float)를 읽는다(`CarPropertyGateway.speedKph`).
+
+| 항목 | 결과 | 환경 |
+|---|---|---|
+| 권한 | `android.car.permission.CAR_SPEED` **런타임 권한**. 매니페스트에 없으면 `pm grant`가 "has not requested permission"으로 거부 | Pleos_Connect_v2.1.0 (API 34, arm64) |
+| 등록 | 권한이 있으면 `registerCallback(…, 1 Hz)` 성공(`speed listener registered`) | 〃 |
+| 값 | 가상 콘솔 `PUT /vehicle/controls?speed_kph=40` → 앱이 받음. **계기판은 그대로**(콘솔은 속도로 누적거리를 늘리지 않음) | 〃 |
+| 세션 동작 | 기어 D + 차속 40, 계기판 0 → 자동 시작, 45초 뒤에도 "기록 중" 유지 · 차속 0 → 약 10초 뒤 정차 대기("기록을 마칠까요?") · 차속 25 → 기록 재개 · 계기판 12.3 → 거리 12.3 km · 기어 P → 확정, `trips.distanceKm = 12.3`, `VEHICLE_ODOMETER` | 〃 |
+
+- 차속은 **움직임 판단에만** 쓰고 거리에는 쓰지 않는다(F-05). 권한·신호가 없으면 계기판만으로 판단한다.
+- [검증 필요] 실차의 차속 갱신 주기, 계기판 갱신 단위(0.1 km 추정).
+- 손 시험 도우미: `scripts/emu.sh` (setup · gear · speed · odo · state · log).

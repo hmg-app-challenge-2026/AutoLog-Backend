@@ -40,7 +40,10 @@ interface TripSessionApi {
     /** 프론트: [운행 시작] (F-02). 이미 기록 중이면 Failed. Odometer를 못 읽어도 시작한다(거리 미확정). */
     suspend fun startSession(): StartResult
 
-    /** 프론트·알림: [기록 종료]. StopCandidate에서도 기다리지 않고 바로 끝낸다 (F-04). */
+    /** 프론트 [기록 종료]: 5초 종료 대기에 들어가 결과 화면을 연다. */
+    suspend fun requestStop()
+
+    /** 종료 대기 화면·알림: 기다리지 않고 바로 끝낸다 (F-04). */
     suspend fun finalize()
 
     /** 프론트·알림: [계속 기록]. StopCandidate → Recording, 정차 기록(Stop)만 남긴다 (F-04). */
@@ -173,6 +176,9 @@ interface ContextApi {
 
     /** 30초 이내 좌표. 없으면 잠깐(최대 3초) 기다리고, 그래도 없으면 null. 앱 A: 출발·도착 스냅샷 (F-07). */
     suspend fun freshFix(): LocationFix?
+
+    /** 내비가 알려 준 현재 위치와 주소. 운행 출발지에 저장한다. */
+    suspend fun currentNaviLocation(): NaviCurrentLocation?
 
     /** 내비 최근 목적지. 실패하면 빈 목록. 프론트: 목적지 없이 끝난 운행의 도착지 후보 (F-06). */
     suspend fun recentDestinations(): List<DestinationInfo>
