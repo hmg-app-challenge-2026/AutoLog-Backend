@@ -63,6 +63,18 @@ class SessionRulesTest {
     }
 
     @Test
+    fun `차속이 3 km_h를 넘으면 계기판과 상관없이 주행이다`() {
+        assertEquals(VehicleMotion.MOVING, DrivingJudge.judge(Gear.DRIVE, true, null, 60_000, speedKph = 30.0))
+        assertEquals(VehicleMotion.MOVING, DrivingJudge.judge(Gear.DRIVE, false, null, 0, speedKph = 30.0))
+        assertEquals(VehicleMotion.STOPPED, DrivingJudge.judge(Gear.DRIVE, true, null, 60_000, speedKph = 2.0))
+    }
+
+    @Test
+    fun `기어 P면 차속이 있어도 주차다`() {
+        assertEquals(VehicleMotion.PARKED, DrivingJudge.judge(Gear.PARK, true, null, 0, speedKph = 30.0))
+    }
+
+    @Test
     fun `기어 신호가 없으면 거리 불변 60초부터 주차로 본다`() {
         assertEquals(VehicleMotion.STOPPED, DrivingJudge.judge(null, true, 0, 59_999))
         assertEquals(VehicleMotion.PARKED, DrivingJudge.judge(null, true, 0, 60_000))

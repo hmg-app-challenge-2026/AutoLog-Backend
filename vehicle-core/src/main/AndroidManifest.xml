@@ -14,6 +14,8 @@
     <uses-permission android:name="pleos.car.permission.CAR_ENERGY" /> <!-- Fuel -->
     <!-- [앱 A] 시동 상태 IGNITION_STATE (AAOS CarPropertyManager). Pleos 공개 API가 없다 -->
     <uses-permission android:name="android.car.permission.CAR_POWERTRAIN" />
+    <!-- AAOS 차속 PERF_VEHICLE_SPEED (움직임 판단). 런타임 권한 — 프론트가 요청한다. 없으면 계기판만으로 판단 -->
+    <uses-permission android:name="android.car.permission.CAR_SPEED" />
     <!-- [앱 B] Fused Location. 상수: ai.pleos.playground.location.fused.constant.PleosPermission.FUSED_LOCATION -->
     <uses-permission android:name="pleos.car.permission.FUSED_LOCATION" />
     <!-- [앱 B] NaviHelper. 없으면 initialize가 "Permission [pleos.car.permission.NAVI_ROUTE] is required"로 실패(에뮬레이터 확인) -->

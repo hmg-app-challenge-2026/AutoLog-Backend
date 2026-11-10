@@ -80,6 +80,9 @@ class TripSessionManager(
 
     @Volatile private var lastMovedAt: Long? = null
 
+    /** 마지막 차속(km/h). 차속 신호가 없는 차면 계속 null — 계기판만으로 판단한다. */
+    @Volatile private var speedKph: Double? = null
+
     /** 지금 기록(또는 재개)을 시작한 시각. '움직임 없음' 판단은 이보다 앞선 시각을 기준으로 삼지 않는다. */
     @Volatile private var watchFrom: Long = 0
 
@@ -99,6 +102,7 @@ class TripSessionManager(
             launch { vehicle.odometer.collect { onOdometer(it) } }
             launch { vehicle.gear.collect { onGear(it) } }
             launch { vehicle.ignitionOff.collect { onIgnitionOff() } }
+            launch { vehicle.speedKph.collect { onSpeed(it) } }
             launch { context.arrivals.collect { onArrival() } }
             launch { context.destination.collect { onDestination(it) } }
             while (isActive) {
@@ -301,6 +305,26 @@ class TripSessionManager(
         autoStartIfDriving()
     }
 
+    /**
+     * 차속 변화. 일정 속도 이상이면 "움직였다"로 기록한다(거리는 바꾸지 않는다).
+     * 계기판이 아직 안 바뀌었어도 자동 시작하고, 정차 대기 중이면 기록을 이어 간다.
+     */
+    private suspend fun onSpeed(kph: Double) {
+        val now = clock.millis()
+        speedKph = kph
+        val moving = DrivingJudge.isMovingSpeed(kph)
+        if (moving) lastMovedAt = now
+        updateMotion()
+        if (moving && gear != Gear.PARK) {
+            mutex.withLock {
+                (_state.value as? SessionState.StopCandidate)
+                    ?.takeIf { it.reason != StopReason.GEAR_P }
+                    ?.let { resumeLocked(it) }
+            }
+            autoStartIfDriving()
+        }
+    }
+
     private suspend fun onGear(g: Gear) {
         gear = g
         updateMotion()
@@ -354,6 +378,8 @@ class TripSessionManager(
     }
 
     private suspend fun onTick() {
+        // 차속 이벤트는 값이 바뀔 때만 올 수 있다. 같은 속도로 달리는 동안에도 "움직이는 중"을 유지한다.
+        if (DrivingJudge.isMovingSpeed(speedKph) && gear != Gear.PARK) lastMovedAt = clock.millis()
         updateMotion()
         mutex.withLock {
             val now = clock.millis()
@@ -526,7 +552,7 @@ class TripSessionManager(
     }
 
     private fun updateMotion() {
-        _motion.value = DrivingJudge.judge(gear, lastKm != null, lastMovedAt, clock.millis())
+        _motion.value = DrivingJudge.judge(gear, lastKm != null, lastMovedAt, clock.millis(), speedKph)
     }
 
     private suspend fun save(trip: TripEntity) = dao.upsert(trip.copy(revision = trip.revision + 1))

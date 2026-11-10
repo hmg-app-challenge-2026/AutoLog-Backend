@@ -374,6 +374,88 @@ class TripSessionManagerTest {
     }
 
     @Test
+    fun `계기판이 그대로여도 차속이 있으면 자동으로 기록을 시작한다`() = runTest {
+        val rig = Rig(this)
+        rig.car.shift(Gear.DRIVE)
+        runCurrent()
+
+        rig.car.speed(30.0)
+        runCurrent()
+
+        assertEquals(VehicleMotion.MOVING, rig.session.motion.value)
+        assertTrue(rig.stateValue is SessionState.Recording)
+    }
+
+    @Test
+    fun `같은 속도로 달리는 동안은 계기판이 1분간 안 바뀌어도 정차로 보지 않는다`() = runTest {
+        val rig = Rig(this)
+        startedTrip(rig)
+        rig.car.speed(20.0) // 이벤트는 한 번만 온다 — 값이 바뀔 때만 오는 차속 신호
+        runCurrent()
+
+        advanceTimeBy(60_000)
+
+        assertTrue(rig.stateValue is SessionState.Recording)
+        assertEquals(VehicleMotion.MOVING, rig.session.motion.value)
+    }
+
+    @Test
+    fun `차속이 0이 되고 10초 지나면 정차 대기로 들어간다`() = runTest {
+        val rig = Rig(this)
+        startedTrip(rig)
+        rig.car.speed(40.0)
+        runCurrent()
+        advanceTimeBy(5_000)
+
+        rig.car.speed(0.0)
+        runCurrent()
+        advanceTimeBy(DrivingJudge.MOVING_WINDOW_MS + 1_500)
+
+        assertEquals(StopReason.NO_MOVEMENT, (rig.stateValue as SessionState.StopCandidate).reason)
+    }
+
+    @Test
+    fun `정차 대기 중에 다시 속도가 나면 기록을 이어 간다`() = runTest {
+        val rig = Rig(this)
+        startedTrip(rig)
+        advanceTimeBy(DrivingJudge.MOVING_WINDOW_MS + 1_500)
+        assertTrue(rig.stateValue is SessionState.StopCandidate)
+
+        rig.car.speed(15.0)
+        runCurrent()
+
+        assertTrue(rig.stateValue is SessionState.Recording)
+    }
+
+    @Test
+    fun `차속은 거리에 들어가지 않는다 — 거리는 계기판 차이뿐`() = runTest {
+        val rig = Rig(this)
+        startedTrip(rig)
+        rig.car.speed(130.0)
+        runCurrent()
+        advanceTimeBy(30_000)
+
+        assertEquals(0.0, (rig.stateValue as SessionState.Recording).liveKm!!, 0.0)
+
+        rig.car.drive(2.5)
+        runCurrent()
+        assertEquals(2.5, (rig.stateValue as SessionState.Recording).liveKm!!, 0.0)
+    }
+
+    @Test
+    fun `기어 P 대기 중에는 차속이 있어도 재개하지 않는다`() = runTest {
+        val rig = Rig(this)
+        startedTrip(rig)
+        rig.car.shift(Gear.PARK)
+        runCurrent()
+
+        rig.car.speed(10.0)
+        runCurrent()
+
+        assertEquals(StopReason.GEAR_P, (rig.stateValue as SessionState.StopCandidate).reason)
+    }
+
+    @Test
     fun `놓친 운행을 무시하면 같은 계기판 값으로는 다시 묻지 않는다`() = runTest {
         val rig = Rig(this) { dao, car ->
             car.km = 18_458.9

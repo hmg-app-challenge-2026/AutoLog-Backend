@@ -50,6 +50,14 @@ class FakeVehicle(private val clock: Clock, var km: Double = 18_420.5, var curre
         ignition.tryEmit(Unit)
     }
 
+    private val speeds = MutableSharedFlow<Double>(extraBufferCapacity = 64)
+    override val speedKph: Flow<Double> = speeds
+
+    /** 차속만 바꾼다. 계기판은 그대로(에뮬레이터 콘솔과 같은 상황). */
+    fun speed(kph: Double) {
+        speeds.tryEmit(kph)
+    }
+
     fun drive(km: Double) {
         this.km = kr.autolog.vehicle.session.DistancePolicy.difference(-km, this.km) // this.km + km, 10진수
         odo.tryEmit(OdometerReading(this.km, clock.millis()))

@@ -106,6 +106,8 @@ class VehicleGateway(
 
     override val ignitionOff: Flow<Unit> = carProps.ignitionOff.flowOn(dispatcher)
 
+    override val speedKph: Flow<Double> = carProps.speedKph.flowOn(dispatcher)
+
     /** 차대번호. 설정 화면의 차량 식별 보조(F-01). 못 읽으면 null. */
     suspend fun readVin(): String? = try {
         val info = vehicle.getCarInfo()

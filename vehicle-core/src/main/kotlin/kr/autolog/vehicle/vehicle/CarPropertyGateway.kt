@@ -13,8 +13,9 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
 
 /**
- * AAOS 표준 차량 속성 (프론트 스펙 1.1.1 4순위). Pleos SDK 2.3.2에 시동 상태 공개 API가 없어 `CarPropertyManager`로 읽는다.
- * 권한 `android.car.permission.CAR_POWERTRAIN`. 차량 OS가 없거나 속성을 못 읽으면 흐름이 조용히 끝난다.
+ * AAOS 표준 차량 속성 (프론트 스펙 1.1.1 4순위). Pleos SDK 2.3.2에 시동 상태·차속 공개 API가 없어 `CarPropertyManager`로 읽는다.
+ * 권한: 시동 `android.car.permission.CAR_POWERTRAIN`, 차속 `android.car.permission.CAR_SPEED`(런타임 권한).
+ * 차량 OS가 없거나 권한이 없거나 속성을 못 읽으면 흐름이 조용히 끝난다 — 세션은 계기판만으로 판단한다.
  */
 class CarPropertyGateway(context: Context) {
     private val props: CarPropertyManager? = runCatching {
@@ -47,6 +48,34 @@ class CarPropertyGateway(context: Context) {
         awaitClose { runCatching { pm.unregisterCallback(callback) } }
     }
 
+    /**
+     * 차속(km/h). AAOS `PERF_VEHICLE_SPEED`(m/s, Float)를 km/h로 바꾼다. 거리 계산에는 쓰지 않고 "움직이는 중"
+     * 판단에만 쓴다 — 계기판은 0.1 km 단위라 저속에서 10초 넘게 안 바뀔 수 있다. [검증 필요] 실차 갱신 주기.
+     */
+    val speedKph: Flow<Double> = callbackFlow {
+        val pm = props
+        if (pm == null) {
+            close()
+            return@callbackFlow
+        }
+        val callback = object : CarPropertyManager.CarPropertyEventCallback {
+            override fun onChangeEvent(value: CarPropertyValue<*>) {
+                val mps = (value.value as? Float) ?: return
+                if (mps.isNaN() || mps.isInfinite()) return
+                trySend(mps * MPS_TO_KPH)
+            }
+
+            override fun onErrorEvent(propertyId: Int, areaId: Int) {
+                Log.w(TAG, "speed error area=$areaId")
+            }
+        }
+        val ok = runCatching {
+            pm.registerCallback(callback, VehiclePropertyIds.PERF_VEHICLE_SPEED, SPEED_RATE_HZ)
+        }.onFailure { Log.w(TAG, "speed register failed: ${it.message}") }.getOrDefault(false)
+        if (!ok) close() else Log.i(TAG, "speed listener registered")
+        awaitClose { runCatching { pm.unregisterCallback(callback) } }
+    }
+
     /** 시동이 꺼지는 순간. */
     val ignitionOff: Flow<Unit> = ignitionState.filter { isOff(it) }.map { }
 
@@ -55,6 +84,8 @@ class CarPropertyGateway(context: Context) {
         private const val LOCK = 1
         private const val OFF = 2
         private const val ACC = 3
+        private const val MPS_TO_KPH = 3.6
+        private const val SPEED_RATE_HZ = 1f
 
         fun isOff(state: Int) = state == LOCK || state == OFF || state == ACC
     }

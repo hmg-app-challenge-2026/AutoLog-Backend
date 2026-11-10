@@ -24,6 +24,9 @@ interface VehicleSignals {
 
     /** 시동이 꺼지는 순간(OFF·ACC·LOCK). 신호가 없는 차면 아무것도 오지 않는다. */
     val ignitionOff: Flow<Unit> get() = emptyFlow()
+
+    /** 차속(km/h). 움직임 판단에만 쓴다(거리는 계기판). 신호·권한이 없는 차면 아무것도 오지 않는다. */
+    val speedKph: Flow<Double> get() = emptyFlow()
 }
 
 /** 계기판 누적거리 한 건. [km]는 SDK 원본 값을 10진수 표기 그대로 옮긴 것이다. */
