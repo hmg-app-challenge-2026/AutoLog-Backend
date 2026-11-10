@@ -385,7 +385,8 @@ class TripSessionManager(
         val now = clock.millis()
         val odo = vehicle.readOdometer()
         odo?.let { observeKm(it, moved = false) }
-        val fix = context.latestFix.value
+        val naviLocation = context.currentNaviLocation()
+        val fix = if (naviLocation == null) context.freshFix() else null
         val driver = _currentDriver.value
         val trip = TripEntity(
             tripId = newId(),
@@ -397,9 +398,14 @@ class TripSessionManager(
             lastOdometerKm = odo?.km,
             lastSeenAt = now,
             distanceSource = if (odo == null) DistanceSource.UNAVAILABLE else DistanceSource.VEHICLE_ODOMETER,
-            originLat = fix?.lat,
-            originLng = fix?.lng,
-            originSource = fix?.let { PlaceSource.FUSED_LOCATION },
+            originLabel = naviLocation?.address?.trim()?.takeIf { it.isNotEmpty() },
+            originLat = naviLocation?.lat ?: fix?.lat,
+            originLng = naviLocation?.lng ?: fix?.lng,
+            originSource = when {
+                naviLocation != null -> PlaceSource.NAVI_CURRENT
+                fix != null -> PlaceSource.FUSED_LOCATION
+                else -> null
+            },
             rawSnapshotJson = "{\"start\":{\"km\":${odo?.km},\"at\":${odo?.at}}}",
         ).let { t -> context.destination.value?.let { t.withDestination(it) } ?: t }
         dao.upsert(trip)

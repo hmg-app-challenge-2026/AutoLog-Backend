@@ -178,6 +178,10 @@ private class GatewayContext(
 
     override suspend fun freshFix(): LocationFix? = location.snapshot()
 
+    override suspend fun currentNaviLocation(): NaviCurrentLocation? = runCatching {
+        navi.currentLocation()?.let { NaviCurrentLocation(it.lat, it.lng, it.address) }
+    }.getOrNull()
+
     override suspend fun recentDestinations(): List<DestinationInfo> = runCatching {
         navi.recentDestinations().map { DestinationInfo(it.label, it.address, it.lat, it.lng) }
     }.getOrDefault(emptyList())
