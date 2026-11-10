@@ -221,6 +221,24 @@ class TripSessionManagerTest {
     }
 
     @Test
+    fun `사용자가 기록 종료를 누르면 5초 대기 후 0 km 운행도 결과로 남긴다`() = runTest {
+        val rig = Rig(this)
+        val id = startedTrip(rig)
+
+        rig.session.requestStop()
+        val candidate = rig.stateValue as SessionState.StopCandidate
+        assertEquals(StopReason.USER_REQUEST, candidate.reason)
+        assertEquals(candidate.since + 5_000, candidate.deadlineAt)
+
+        advanceTimeBy(4_000)
+        assertTrue(rig.stateValue is SessionState.StopCandidate)
+        advanceTimeBy(2_000)
+
+        assertEquals(0.0, (rig.stateValue as SessionState.PendingReview).distanceKm!!, 0.0)
+        assertEquals(TripStatus.PENDING_REVIEW, rig.dao.trip(id)!!.status)
+    }
+
+    @Test
     fun `목적을 확정하면 확정 상태로 저장하고 Idle로 돌아간다`() = runTest {
         val rig = Rig(this)
         val id = startedTrip(rig)

@@ -65,6 +65,11 @@ class FakeTripSession(
         finalizeNow()
     }
 
+    override suspend fun requestStop() {
+        val s = _state.value as? SessionState.Recording ?: return
+        startAutoEnd(s, StopReason.USER_REQUEST)
+    }
+
     override suspend fun resume() {
         val s = _state.value as? SessionState.StopCandidate ?: return
         autoEndJob?.cancel()
