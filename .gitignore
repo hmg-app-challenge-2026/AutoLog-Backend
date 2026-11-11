@@ -16,3 +16,6 @@ dist/
 *.keystore
 .DS_Store
 
+
+# TypeScript 증분 빌드 정보
+*.tsbuildinfo
