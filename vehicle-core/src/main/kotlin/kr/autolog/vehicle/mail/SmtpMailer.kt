@@ -19,7 +19,6 @@ import javax.mail.internet.InternetAddress
 import javax.mail.internet.MimeBodyPart
 import javax.mail.internet.MimeMessage
 import javax.mail.internet.MimeMultipart
-import javax.mail.internet.MimeUtility
 
 /** 보낼 메일 한 통. */
 data class OutgoingMail(
@@ -55,7 +54,9 @@ class SmtpMailer(private val timeoutMs: Int = DEFAULT_TIMEOUT_MS) {
                             addBodyPart(
                                 MimeBodyPart().apply {
                                     attachFile(mail.attachment, mail.attachmentMime, "base64")
-                                    fileName = MimeUtility.encodeText(mail.attachmentName, UTF8, "B")
+                                    // 한글 파일명은 RFC 2231(filename*=UTF-8''…)로 넣는다. "=?UTF-8?B?…?=" 형식은
+                                    // Gmail 등이 첨부 이름으로 풀지 않아 깨져 보인다.
+                                    fileName = mail.attachmentName
                                 },
                             )
                         },
@@ -143,6 +144,12 @@ class SmtpMailer(private val timeoutMs: Int = DEFAULT_TIMEOUT_MS) {
     }
 
     companion object {
+        init {
+            // 파라미터(첨부 파일명)를 RFC 2231로 인코딩한다. encodefilename(=encoded-word)은 끈다.
+            System.setProperty("mail.mime.encodeparameters", "true")
+            System.setProperty("mail.mime.encodefilename", "false")
+        }
+
         const val DEFAULT_TIMEOUT_MS = 15_000
         const val SSL_PORT = 465
         private const val UTF8 = "UTF-8"

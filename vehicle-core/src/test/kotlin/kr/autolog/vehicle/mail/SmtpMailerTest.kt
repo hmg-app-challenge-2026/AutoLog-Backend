@@ -20,7 +20,6 @@ import java.util.Properties
 import javax.mail.Session
 import javax.mail.internet.MimeMessage
 import javax.mail.internet.MimeMultipart
-import javax.mail.internet.MimeUtility
 
 class SmtpMailerTest {
     private val server =
@@ -48,7 +47,7 @@ class SmtpMailerTest {
 
         assertEquals(MailResult.Ok, result)
         val msg = parse(server.received.single())
-        assertEquals("[AutoLog] 2026-11 운행기록부 — 12가3456", msg.subject)
+        assertEquals("[AutoLog] 2026년 11월 운행기록부 · 12가3456", msg.subject)
         assertEquals("boss@example.com", msg.allRecipients.single().toString())
         val parts = msg.content as MimeMultipart
         val body = parts.getBodyPart(0).content as String
@@ -56,7 +55,11 @@ class SmtpMailerTest {
         assertTrue(body.contains("1,234.6 km"))
         assertTrue(body.contains("검토 필요 3건"))
         val attachment = parts.getBodyPart(1)
-        assertEquals("운행기록부_2026-11_12가3456.xlsx", MimeUtility.decodeText(attachment.fileName))
+        assertEquals("운행기록부_2026-11_12가3456.xlsx", attachment.fileName)
+        // Gmail이 풀 수 있는 RFC 2231 형식이어야 한다("=?UTF-8?B?" 형식이면 첨부 이름이 깨져 보임)
+        val raw = server.received.single()
+        assertTrue(raw.contains("filename*=UTF-8''"))
+        assertFalse(raw.contains("filename=\"=?UTF-8?"))
         assertTrue(attachment.contentType.startsWith(MailComposer.XLSX_MIME))
     }
 
