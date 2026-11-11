@@ -138,7 +138,7 @@ object AutoLog {
             context = ctx,
             purpose = purpose,
             voice = VoiceService(speech, store, log = log),
-            receipts = ReceiptService(store, inbox, log = log),
+            receipts = ReceiptService(store, inbox, log = log, scope = scope),
             mail = mail,
             settings = settings,
         )

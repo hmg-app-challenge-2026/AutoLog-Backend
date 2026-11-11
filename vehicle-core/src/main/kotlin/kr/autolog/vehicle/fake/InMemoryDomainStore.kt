@@ -89,5 +89,11 @@ class FakeRelayClient(
         return qr
     }
 
-    override suspend fun syncNow(): SyncResult = sync
+    var syncCalls = 0
+        private set
+
+    override suspend fun syncNow(): SyncResult {
+        syncCalls++
+        return sync
+    }
 }

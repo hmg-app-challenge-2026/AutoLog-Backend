@@ -1,5 +1,10 @@
 package kr.autolog.vehicle.domain
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kr.autolog.shared.ReceiptFields
 import kr.autolog.shared.ReceiptPayload
 import kr.autolog.vehicle.core.ConfirmResult
@@ -9,6 +14,7 @@ import kr.autolog.vehicle.core.ExpenseSource
 import kr.autolog.vehicle.core.QrResult
 import kr.autolog.vehicle.core.ReceiptApi
 import kr.autolog.vehicle.core.RelayClient
+import kr.autolog.vehicle.core.SyncResult
 import kr.autolog.vehicle.core.TripCandidate
 import kr.autolog.vehicle.core.VoiceFuel
 import java.time.Clock
@@ -16,6 +22,9 @@ import java.time.Clock
 /**
  * [ReceiptApi] 구현 (F-19, F-30).
  * - QR: 서버에서 1회용 토큰 URL을 받는다(앱 A의 RelayClient). 토큰이 1회용이라 캐시하지 않는다.
+ *   QR이 유효한 동안 [pollIntervalMs]마다 inbox를 받아, 폰에서 올린 영수증이 몇 초 안에 차 화면에 뜨게 한다
+ *   (기술명세 3.2 "QR 화면 열린 동안 주기 동기화", F-30 "QR 스캔부터 차 화면 카드까지 15초 내").
+ *   새 편지가 들어오면(=영수증 도착) 또는 QR이 만료되면 멈춘다. QR을 다시 발급하면 이전 폴링은 취소한다.
  * - 후보: [ReceiptMatcher].
  * - 확정: 검산·중복 확인 → 비용 저장 → inbox ack. 고친 필드는 editedFields로 남긴다.
  */
@@ -24,12 +33,48 @@ class ReceiptService(
     private val relay: RelayClient,
     private val clock: Clock = Clock.systemUTC(),
     private val log: (String) -> Unit = {},
+    /** QR 폴링을 돌릴 범위. null이면 폴링하지 않는다(테스트·폴링 불필요한 곳). */
+    private val scope: CoroutineScope? = null,
+    private val pollIntervalMs: Long = QR_POLL_MS,
 ) : ReceiptApi {
-    override suspend fun issueQr(): QrResult = try {
-        relay.issueQrToken()
-    } catch (e: Exception) {
-        log("QR 발급 실패: ${e.message}")
-        QrResult.Failed("서버에 연결하지 못했습니다")
+    @Volatile private var polling: Job? = null
+
+    override suspend fun issueQr(): QrResult {
+        val result =
+            try {
+                relay.issueQrToken()
+            } catch (e: Exception) {
+                log("QR 발급 실패: ${e.message}")
+                QrResult.Failed("서버에 연결하지 못했습니다")
+            }
+        if (result is QrResult.Issued) pollUntil(result.expiresAt)
+        return result
+    }
+
+    /**
+     * QR 만료 시각까지 inbox를 주기적으로 받는다. 처음 받은 편지 수를 기준으로, 그보다 늘면 영수증이 도착한 것으로 보고 멈춘다.
+     * (확정 전 영수증은 ack하지 않아 매번 다시 오므로 "있다"가 아니라 "늘었다"로 판단한다.)
+     */
+    private fun pollUntil(expiresAt: Long) {
+        val s = scope ?: return
+        polling?.cancel()
+        polling =
+            s.launch {
+                var baseline: Int? = null
+                while (isActive && clock.millis() < expiresAt) {
+                    val received = (runCatching { relay.syncNow() }.getOrNull() as? SyncResult.Ok)?.received
+                    if (received != null) {
+                        val before = baseline
+                        if (before == null) {
+                            baseline = received
+                        } else if (received > before) {
+                            log("QR 폴링: 새 편지 도착 → 멈춤")
+                            break
+                        }
+                    }
+                    delay(pollIntervalMs)
+                }
+            }
     }
 
     override suspend fun candidates(receipt: ReceiptPayload): List<TripCandidate> {
@@ -113,6 +158,8 @@ class ReceiptService(
         iso?.let { runCatching { java.time.OffsetDateTime.parse(it).toInstant().toEpochMilli() }.getOrNull() }
 
     companion object {
+        /** QR 화면 동안 inbox 확인 주기. */
+        const val QR_POLL_MS = 3_000L
         const val LONG_TRIP_MS = 12 * 60 * 60 * 1000L
 
         /** 숫자만 남겨 끝 4자리. 4자리가 안 되면 null — 카드번호 전체가 저장되지 않게 한다. */
